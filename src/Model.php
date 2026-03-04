@@ -50,13 +50,13 @@ abstract class Model
 
     // ── Shared connection ────────────────────────────────────────────────────
 
-    private static ?Connection $connection = null;
+    private static Connection|\Closure|null $connection = null;
 
     /**
      * Set the shared database connection for all models.
      * Called by the application's DatabaseServiceProvider during boot().
      */
-    public static function setConnection(Connection $connection): void
+    public static function setConnection(Connection|\Closure $connection): void
     {
         static::$connection = $connection;
     }
@@ -68,11 +68,16 @@ abstract class Model
      */
     public static function getConnection(): Connection
     {
+        if (static::$connection instanceof \Closure) {
+            static::$connection = (static::$connection)();
+        }
+
         if (static::$connection === null) {
             throw new \LogicException(
                 'No database connection set. Call Model::setConnection() in your DatabaseServiceProvider.'
             );
         }
+
         return static::$connection;
     }
 
