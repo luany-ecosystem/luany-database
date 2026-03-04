@@ -12,7 +12,14 @@
         }
     ],
     "keywords": [
-        "php", "database", "orm", "model", "querybuilder", "migrations", "pdo", "luany"
+        "php",
+        "database",
+        "orm",
+        "activerecord",
+        "query-builder",
+        "migrations",
+        "pdo",
+        "luany"
     ],
     "homepage": "https://github.com/luany-ecosystem/luany-database",
     "require": {
