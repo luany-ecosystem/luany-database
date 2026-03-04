@@ -8,15 +8,12 @@ coverage/
 coverage.xml
 
 # IDE
-/.idea/
-/.vscode/
+.idea/
+.vscode/
 
 # OS
 .DS_Store
 Thumbs.db
-
-# Composer
-composer.lock
 
 # Logs
 *.log
