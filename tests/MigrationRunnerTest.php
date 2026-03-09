@@ -174,4 +174,72 @@ class MigrationRunnerTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->runner()->run();
     }
+
+    // ── status() ──────────────────────────────────────────────────────────────
+
+    public function test_status_returns_empty_when_no_files(): void
+    {
+        $this->assertSame([], $this->runner()->status());
+    }
+
+    public function test_status_marks_pending_migrations_as_not_ran(): void
+    {
+        $this->writeMigration('2026_01_01_000001_create_alpha_table.php', 'create_alpha_table');
+
+        $status = $this->runner()->status();
+
+        $this->assertCount(1, $status);
+        $this->assertFalse($status[0]['ran']);
+        $this->assertNull($status[0]['batch']);
+    }
+
+    public function test_status_marks_ran_migrations_correctly(): void
+    {
+        $this->writeMigration('2026_01_01_000001_create_alpha_table.php', 'create_alpha_table');
+        $runner = $this->runner();
+        $runner->run();
+
+        $status = $runner->status();
+
+        $this->assertCount(1, $status);
+        $this->assertTrue($status[0]['ran']);
+        $this->assertSame(1, $status[0]['batch']);
+    }
+
+    public function test_status_mixes_ran_and_pending(): void
+    {
+        $this->writeMigration('2026_01_01_000001_create_alpha_table.php', 'create_alpha_table');
+        $this->writeMigration('2026_01_01_000002_create_beta_table.php',  'create_beta_table');
+
+        $runner = $this->runner();
+        $runner->run(); // runs both
+
+        $this->writeMigration('2026_01_01_000003_create_gamma_table.php', 'create_gamma_table');
+
+        $status = $runner->status();
+
+        $this->assertCount(3, $status);
+        $this->assertTrue($status[0]['ran']);
+        $this->assertTrue($status[1]['ran']);
+        $this->assertFalse($status[2]['ran']);
+    }
+
+    // ── dropAll() ─────────────────────────────────────────────────────────────
+
+    public function test_drop_all_removes_all_tables(): void
+    {
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS `foo` (id INTEGER PRIMARY KEY)");
+        $this->pdo->exec("CREATE TABLE IF NOT EXISTS `bar` (id INTEGER PRIMARY KEY)");
+
+        $this->runner()->dropAll($this->pdo);
+
+        $result = $this->pdo->query("SELECT name FROM sqlite_master WHERE type='table'")->fetchAll(\PDO::FETCH_COLUMN);
+        $this->assertEmpty($result);
+    }
+
+    public function test_drop_all_on_empty_database_does_not_throw(): void
+    {
+        $this->runner()->dropAll($this->pdo);
+        $this->assertTrue(true);
+    }
 }

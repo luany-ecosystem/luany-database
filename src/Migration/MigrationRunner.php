@@ -139,6 +139,74 @@ class MigrationRunner
         ));
     }
 
+    /**
+     * Return the status of all migrations — ran or pending.
+     *
+     * @return array<int, array{name: string, ran: bool, batch: int|null}>
+     */
+    public function status(): array
+    {
+        $this->repository->ensureTable();
+
+        $ran    = $this->repository->getRan();
+        $files  = $this->getFiles();
+        $result = [];
+
+        // Build a map of name → batch from the repository
+        $stmt = $this->pdo->query(
+            "SELECT migration, batch FROM `_migrations` ORDER BY id ASC"
+        );
+        $batches = [];
+        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            $batches[$row['migration']] = (int) $row['batch'];
+        }
+
+        foreach ($files as $file) {
+            $name      = $this->nameFromFile($file);
+            $hasRun    = in_array($name, $ran, true);
+            $result[]  = [
+                'name'  => $name,
+                'ran'   => $hasRun,
+                'batch' => $hasRun ? ($batches[$name] ?? null) : null,
+            ];
+        }
+
+        return $result;
+    }
+
+    /**
+     * Drop all user tables from the database.
+     * Used by migrate:fresh — wipes the schema before re-running all migrations.
+     */
+    public function dropAll(\PDO $pdo): void
+    {
+        $driver = $pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+
+        if ($driver === 'sqlite') {
+            $stmt   = $pdo->query("SELECT name FROM sqlite_master WHERE type='table'");
+            $tables = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        } else {
+            $stmt   = $pdo->query("SHOW TABLES");
+            $tables = $stmt->fetchAll(\PDO::FETCH_COLUMN);
+        }
+
+        if (empty($tables)) {
+            return;
+        }
+
+        if ($driver !== 'sqlite') {
+            $pdo->exec("SET FOREIGN_KEY_CHECKS = 0");
+        }
+
+        foreach ($tables as $table) {
+            $pdo->exec("DROP TABLE IF EXISTS `{$table}`");
+        }
+
+        if ($driver !== 'sqlite') {
+            $pdo->exec("SET FOREIGN_KEY_CHECKS = 1");
+        }
+    }
+
     // ── Private ───────────────────────────────────────────────────────────────
 
     /**

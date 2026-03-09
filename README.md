@@ -180,6 +180,13 @@ $runner->rollback(function (string $name, string $status) {
 
 // List pending without running
 $pending = $runner->pending();
+
+// Status of all migrations (ran + pending)
+$status = $runner->status();
+// [['name' => '...', 'ran' => true, 'batch' => 1], ...]
+
+// Drop all tables (used by migrate:fresh)
+$runner->dropAll($pdo);
 ```
 
 ---
@@ -192,9 +199,8 @@ Tests use **SQLite in-memory** — no MySQL, no network, no `.env` required.
 composer install
 ./vendor/bin/phpunit --testdox
 ```
-
 ```
-OK (45 tests, 55 assertions)
+OK (51 tests, 68 assertions)
 ```
 
 ---
