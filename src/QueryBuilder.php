@@ -2,6 +2,8 @@
 
 namespace Luany\Database;
 
+use Luany\Database\PaginationResult;
+
 /**
  * QueryBuilder
  *
@@ -227,6 +229,82 @@ class QueryBuilder
     public function exists(): bool
     {
         return $this->count() > 0;
+    }
+
+    /**
+     * Paginate the query results.
+     *
+     * Executes TWO queries:
+     *   1. COUNT(*) with the current WHERE clause — to know the total.
+     *   2. SELECT with LIMIT + OFFSET for the requested page.
+     *
+     * Both queries share the same WHERE bindings, ORDER BY, and table.
+     * LIMIT/OFFSET values are injected as integers directly (not as bindings)
+     * because PDO does not support binding integer placeholders in LIMIT/OFFSET
+     * on all drivers.
+     *
+     * @param  int  $perPage  Rows per page (must be >= 1)
+     * @param  int  $page     Page number, 1-based (values < 1 are clamped to 1)
+     * @return PaginationResult
+     *
+     * @throws \InvalidArgumentException  If $perPage < 1
+     * @throws \RuntimeException          If no table was set
+     */
+    public function paginate(int $perPage = 15, int $page = 1): PaginationResult
+    {
+        $this->requireTable();
+
+        if ($perPage < 1) {
+            throw new \InvalidArgumentException('perPage must be at least 1.');
+        }
+
+        // Clamp page to a minimum of 1
+        $page = max(1, $page);
+
+        // ── 1. Count total matching rows ───────────────────────────────────
+        $countSql    = "SELECT COUNT(*) FROM `{$this->table}`";
+        $countSql   .= $this->compileWheres();
+        $countResult = $this->query($countSql, $this->bindings)->fetchColumn();
+        $total       = (int) ($countResult[0] ?? 0);
+
+        // ── 2. Fetch the page data ─────────────────────────────────────────
+        $offset = ($page - 1) * $perPage;
+
+        // Clone the builder state to avoid mutating the current instance
+        $dataSql  = $this->compileSelect();
+
+        // Override/append LIMIT and OFFSET (safe integer interpolation)
+        // compileSelect() may already have limitVal/offsetVal from chaining,
+        // but for pagination we always override with our calculated values.
+        $dataSql = $this->compileSelectForPagination($perPage, $offset);
+
+        $rows = $this->query($dataSql, $this->bindings)->fetchAll();
+
+        return new PaginationResult(
+            data:        $rows,
+            total:       $total,
+            perPage:     $perPage,
+            currentPage: $page,
+        );
+    }
+
+    /**
+     * Compile a SELECT for pagination, always overriding LIMIT and OFFSET.
+     * Integers are interpolated directly — safe because they are cast to int.
+     */
+    private function compileSelectForPagination(int $limit, int $offset): string
+    {
+        $cols = $this->columns === ['*'] ? '*' : '`' . implode('`, `', $this->columns) . '`';
+        $sql  = "SELECT {$cols} FROM `{$this->table}`";
+        $sql .= $this->compileWheres();
+
+        if ($this->orderBy !== null) {
+            $sql .= " ORDER BY {$this->orderBy}";
+        }
+
+        $sql .= " LIMIT {$limit} OFFSET {$offset}";
+
+        return $sql;
     }
 
     // ── Raw methods (backward-compatible) ───────────────────────────────────────

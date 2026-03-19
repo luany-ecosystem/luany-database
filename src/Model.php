@@ -2,6 +2,11 @@
 
 namespace Luany\Database;
 
+use Luany\Database\Relations\BelongsTo;
+use Luany\Database\Relations\HasMany;
+use Luany\Database\Relations\HasOne;
+use Luany\Database\Relations\Relation;
+
 /**
  * Model
  *
@@ -22,13 +27,18 @@ namespace Luany\Database;
  *
  *   User::setConnection($connection);
  *
- *   $user  = User::find(1);
- *   $users = User::all();
- *   $found = User::where('active = ?', [1]);
- *   $user  = User::create(['name' => 'António', 'email' => 'a@b.com']);
- *   $user->name = 'Ngola';
- *   $user->save();
- *   $user->delete();
+ * Relationships:
+ *   public function posts(): HasMany   { return $this->hasMany(Post::class, 'user_id'); }
+ *   public function profile(): HasOne  { return $this->hasOne(Profile::class, 'user_id'); }
+ *   public function user(): BelongsTo { return $this->belongsTo(User::class, 'user_id'); }
+ *
+ *   // Lazy access (property syntax):
+ *   $user->posts;    // array of Post instances (cached after first access)
+ *   $user->profile;  // Profile instance or null
+ *
+ *   // Eager loading (prevents N+1):
+ *   User::with('posts', 'profile')->all();
+ *   User::with('profile')->find(1);
  */
 abstract class Model
 {
@@ -44,9 +54,19 @@ abstract class Model
     protected array $hidden = [];
 
     // ── Internal state ───────────────────────────────────────────────────────
+    // NOTE: protected (not private) so the SoftDeletes trait can access them.
 
-    private array $attributes = [];
-    private bool  $exists     = false;
+    /** Raw column values from the database */
+    protected array $attributes = [];
+
+    /** Cached relation results, keyed by relation method name */
+    protected array $relations  = [];
+
+    /** Whether this instance exists in the database */
+    protected bool  $exists     = false;
+
+    /** Relations to eager-load on the next query */
+    private static array $eagerLoad = [];
 
     // ── Shared connection ────────────────────────────────────────────────────
 
@@ -81,10 +101,41 @@ abstract class Model
         return static::$connection;
     }
 
+    // ── Eager loading ──────────────────────────────────────────────────────────
+
+    /**
+     * Specify relations to eager-load on the next query.
+     * Returns an EagerProxy that wraps all() and find() with eager-load injection.
+     *
+     * Usage:
+     *   User::with('posts')->all();
+     *   User::with('posts', 'profile')->all();
+     *   User::with('profile')->find(1);
+     */
+    public static function with(string ...$relations): EagerProxy
+    {
+        return new EagerProxy(static::class, $relations);
+    }
+
+    /**
+     * Set the eager-load relations for the next query.
+     * Called by EagerProxy before delegating to all() or find().
+     * Consumed and reset by eagerLoadRelations() after the query executes.
+     *
+     * @internal Used by EagerProxy — do not call directly.
+     *
+     * @param string[] $relations
+     */
+    public static function setEagerLoad(array $relations): void
+    {
+        static::$eagerLoad = $relations;
+    }
+
     // ── Static query methods ─────────────────────────────────────────────────
 
     /**
-     * Get a fresh QueryBuilder instance scoped to this model's table.
+     * Get a fresh QueryBuilder scoped to this model's table.
+     * Overridden by the SoftDeletes trait to add WHERE deleted_at IS NULL.
      */
     protected static function newQuery(): QueryBuilder
     {
@@ -102,18 +153,23 @@ abstract class Model
             ->where($instance->primaryKey, '=', $id)
             ->first();
 
-        return $row ? $instance->hydrate($row) : null;
+        if ($row === null) {
+            return null;
+        }
+
+        $model = static::hydrateFromRow($row);
+        static::eagerLoadRelations([$model]);
+
+        return $model;
     }
 
     /**
      * Return all records, optionally ordered.
      *
-     * Only allows safe column identifiers in the ORDER BY clause.
-     * Each term must match: column_name (ASC|DESC)?
-     * separated by commas. Anything else throws \InvalidArgumentException.
+     * ORDER BY is validated against a strict whitelist (column names + ASC/DESC only)
+     * to prevent SQL injection.
      *
      * @return static[]
-     *
      * @throws \InvalidArgumentException If $orderBy contains disallowed characters.
      */
     public static function all(string $orderBy = ''): array
@@ -122,7 +178,6 @@ abstract class Model
 
         if ($orderBy !== '') {
             static::validateOrderBy($orderBy);
-            // Parse validated ORDER BY into fluent calls
             foreach (explode(',', $orderBy) as $term) {
                 $parts  = preg_split('/\s+/', trim($term));
                 $column = $parts[0];
@@ -131,10 +186,14 @@ abstract class Model
             }
         }
 
-        return array_map(
-            fn(array $row) => (new static())->hydrate($row),
+        $models = array_map(
+            fn(array $row) => static::hydrateFromRow($row),
             $query->get()
         );
+
+        static::eagerLoadRelations($models);
+
+        return $models;
     }
 
     /**
@@ -150,7 +209,7 @@ abstract class Model
         $sql      = "SELECT * FROM `{$instance->table}` WHERE {$conditions}";
 
         return array_map(
-            fn(array $row) => (new static())->hydrate($row),
+            fn(array $row) => static::hydrateFromRow($row),
             (new QueryBuilder(static::getConnection()))->query($sql, $bindings)->fetchAll()
         );
     }
@@ -214,7 +273,8 @@ abstract class Model
     }
 
     /**
-     * Delete this record from the database.
+     * Hard-delete this record from the database.
+     * NOTE: Overridden by the SoftDeletes trait to soft-delete instead.
      */
     public function delete(): bool
     {
@@ -253,17 +313,138 @@ abstract class Model
     }
 
     /**
-     * Whether this instance was loaded from the database.
+     * Whether this instance was loaded from (or persisted to) the database.
      */
     public function exists(): bool
     {
         return $this->exists;
     }
 
+    // ── Relationships ──────────────────────────────────────────────────────────
+    //
+    // Relationship methods return Relation descriptor objects.
+    // These objects carry the full metadata WITHOUT executing a query.
+    //
+    // Lazy loading  → __get() → getRelation() → Relation::getResults()  [1 query per call, cached]
+    // Eager loading → with()  → batchLoad()                             [1 query for all models]
+
+    /**
+     * One-to-one (FK on related table).
+     *
+     * @param class-string<Model> $related     Related model FQCN
+     * @param string|null         $foreignKey  FK column on related table (default: {table_singular}_id)
+     * @param string|null         $localKey    Local column (default: primary key)
+     */
+    protected function hasOne(string $related, ?string $foreignKey = null, ?string $localKey = null): HasOne
+    {
+        $localKey   = $localKey ?? $this->primaryKey;
+        $foreignKey = $foreignKey ?? $this->guessForeignKey();
+
+        return new HasOne(
+            static::getConnection(),
+            $related,
+            $foreignKey,
+            $localKey,
+            $this->getAttribute($localKey),
+        );
+    }
+
+    /**
+     * One-to-many (FK on related table).
+     *
+     * @param class-string<Model> $related
+     * @param string|null         $foreignKey  FK column on related table
+     * @param string|null         $localKey    Local column
+     */
+    protected function hasMany(string $related, ?string $foreignKey = null, ?string $localKey = null): HasMany
+    {
+        $localKey   = $localKey ?? $this->primaryKey;
+        $foreignKey = $foreignKey ?? $this->guessForeignKey();
+
+        return new HasMany(
+            static::getConnection(),
+            $related,
+            $foreignKey,
+            $localKey,
+            $this->getAttribute($localKey),
+        );
+    }
+
+    /**
+     * Inverse belongs-to (FK on THIS table).
+     *
+     * @param class-string<Model> $related
+     * @param string|null         $foreignKey  FK column on THIS table (default: {related_singular}_id)
+     * @param string|null         $ownerKey    PK on related table
+     */
+    protected function belongsTo(string $related, ?string $foreignKey = null, ?string $ownerKey = null): BelongsTo
+    {
+        /** @var Model $relatedInstance */
+        $relatedInstance = new $related();
+        $ownerKey   = $ownerKey ?? $relatedInstance->primaryKey;
+        $foreignKey = $foreignKey ?? $this->guessRelatedForeignKey($relatedInstance);
+
+        return new BelongsTo(
+            static::getConnection(),
+            $related,
+            $foreignKey,
+            $ownerKey,
+            $this->getAttribute($foreignKey),
+        );
+    }
+
+    /**
+     * Get a cached relation result, or load it via the relation method (lazy load).
+     *
+     * @param string $relation Method name on this model
+     */
+    public function getRelation(string $relation): mixed
+    {
+        if (array_key_exists($relation, $this->relations)) {
+            return $this->relations[$relation];
+        }
+
+        if (!method_exists($this, $relation)) {
+            throw new \BadMethodCallException(
+                "Relation method [{$relation}] does not exist on " . static::class . '.'
+            );
+        }
+
+        $result = $this->{$relation}();
+
+        // If the method returned a Relation descriptor, resolve it now
+        if ($result instanceof Relation) {
+            $result = $result->getResults();
+        }
+
+        $this->relations[$relation] = $result;
+
+        return $result;
+    }
+
+    /**
+     * Set a relation value directly (used by batchLoad during eager loading).
+     */
+    public function setRelation(string $relation, mixed $value): void
+    {
+        $this->relations[$relation] = $value;
+    }
+
     // ── Magic property access ─────────────────────────────────────────────────
 
     public function __get(string $key): mixed
     {
+        // Already-loaded relation result (cached)
+        if (array_key_exists($key, $this->relations)) {
+            return $this->relations[$key];
+        }
+
+        // Relation method → lazy-load and cache
+        if (method_exists($this, $key)) {
+            return $this->getRelation($key);
+        }
+
+        // Raw attribute
         return $this->attributes[$key] ?? null;
     }
 
@@ -280,17 +461,15 @@ abstract class Model
     // ── Order-by validation ─────────────────────────────────────────────────
 
     /**
-     * Validate the ORDER BY clause against a strict whitelist pattern.
+     * Validate ORDER BY string against a strict whitelist.
+     * Declared protected so the SoftDeletes trait can call static::validateOrderBy().
      *
-     * Allowed format: one or more comma-separated terms where each term is
-     *   column_name (ASC|DESC)?
-     * Column names must consist of [a-zA-Z0-9_] only.
+     * Allowed: column_name [ASC|DESC] (, column_name [ASC|DESC])*
      *
      * @throws \InvalidArgumentException
      */
-    private static function validateOrderBy(string $orderBy): void
+    protected static function validateOrderBy(string $orderBy): void
     {
-        // Pattern: word(ASC|DESC)? (, word(ASC|DESC)?)*
         $pattern = '/^[a-zA-Z_][a-zA-Z0-9_]*(\s+(ASC|DESC))?(\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*(\s+(ASC|DESC))?)*$/i';
 
         if (!preg_match($pattern, trim($orderBy))) {
@@ -301,6 +480,25 @@ abstract class Model
         }
     }
 
+    // ── Public hydration ──────────────────────────────────────────────────────
+
+    /**
+     * Create a hydrated model instance from a raw database row.
+     *
+     * Declared public so Relation classes can call:
+     *   ($this->relatedClass)::hydrateFromRow($row)
+     *
+     * @param  array<string, mixed>  $row
+     * @return static
+     */
+    public static function hydrateFromRow(array $row): static
+    {
+        $instance             = new static();
+        $instance->attributes = $row;
+        $instance->exists     = true;
+        return $instance;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private function performInsert(): bool
@@ -309,7 +507,9 @@ abstract class Model
 
         static::newQuery()->insert($filtered);
 
-        $this->attributes[$this->primaryKey] = (int) (new QueryBuilder(static::getConnection()))->lastInsertId();
+        $this->attributes[$this->primaryKey] =
+            (int) (new QueryBuilder(static::getConnection()))->lastInsertId();
+
         $this->exists = true;
         return true;
     }
@@ -333,15 +533,120 @@ abstract class Model
         return array_intersect_key($data, array_flip($this->fillable));
     }
 
-    private function getAttribute(string $key): mixed
+    /**
+     * Get an attribute value by column name.
+     * Public so Relation classes can read FK/PK values from model instances.
+     */
+    public function getAttribute(string $key): mixed
     {
         return $this->attributes[$key] ?? null;
     }
 
-    private function hydrate(array $row): static
+    protected function setAttribute(string $key, mixed $value): void
     {
-        $this->attributes = $row;
-        $this->exists     = true;
-        return $this;
+        $this->attributes[$key] = $value;
+    }
+
+    /**
+     * Mass-assign fillable attributes.
+     */
+    public function fill(array $attributes): void
+    {
+        foreach ($this->filterFillable($attributes) as $key => $value) {
+            $this->attributes[$key] = $value;
+        }
+    }
+
+    /**
+     * Guess FK for hasOne/hasMany: table 'users' → 'user_id'.
+     * For irregular plurals, pass $foreignKey explicitly.
+     */
+    private function guessForeignKey(): string
+    {
+        return rtrim($this->table, 's') . '_id';
+    }
+
+    /**
+     * Guess FK for belongsTo: related table 'users' → 'user_id' on this table.
+     */
+    private function guessRelatedForeignKey(Model $related): string
+    {
+        return rtrim($related->table, 's') . '_id';
+    }
+
+    /**
+     * Get the table name (used by Relation classes).
+     */
+    public function getTable(): string
+    {
+        return $this->table;
+    }
+
+    /**
+     * Get the primary key name.
+     */
+    public function getPrimaryKey(): string
+    {
+        return $this->primaryKey;
+    }
+
+    // ── Eager loading internals ───────────────────────────────────────────────
+
+    /**
+     * Eager-load all registered relations on a set of models.
+     * Resets static::$eagerLoad after loading.
+     *
+     * @param static[] $models
+     */
+    private static function eagerLoadRelations(array $models): void
+    {
+        $relations         = static::$eagerLoad;
+        static::$eagerLoad = [];
+
+        if (empty($relations) || empty($models)) {
+            return;
+        }
+
+        foreach ($relations as $relation) {
+            static::eagerLoadRelation($models, $relation);
+        }
+    }
+
+    /**
+     * Eager-load a single relation on all models.
+     *
+     * Algorithm (N+1 free):
+     * 1. Call relation method on first model → get Relation descriptor (no query).
+     * 2. Delegate to Relation::batchLoad() → ONE IN() query → map results to models.
+     *
+     * @param static[] $models
+     */
+    private static function eagerLoadRelation(array &$models, string $relation): void
+    {
+        if (empty($models)) {
+            return;
+        }
+
+        $sample = $models[0];
+
+        if (!method_exists($sample, $relation)) {
+            throw new \BadMethodCallException(
+                "Relation method [{$relation}] does not exist on " . static::class . '.'
+            );
+        }
+
+        // Get the Relation descriptor — no query executed yet
+        $descriptor = $sample->{$relation}();
+
+        if ($descriptor instanceof Relation) {
+            // Proper batch load: one query for all parent models
+            $descriptor->batchLoad($models, $relation);
+        } else {
+            // Fallback: plain value returned — load per-model (safe but not N+1-free)
+            $sample->setRelation($relation, $descriptor);
+            for ($i = 1, $count = count($models); $i < $count; $i++) {
+                $models[$i]->setRelation($relation, $models[$i]->{$relation}());
+            }
+        }
     }
 }
