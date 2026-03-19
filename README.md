@@ -200,7 +200,7 @@ composer install
 ./vendor/bin/phpunit --testdox
 ```
 ```
-OK (51 tests, 68 assertions)
+OK (56 tests, 75 assertions)
 ```
 
 ---
@@ -234,6 +234,12 @@ src/
 | [luany/luany](https://github.com/luany-ecosystem/luany) | Official application skeleton |
 
 ---
+
+## Changelog
+
+### v0.1.3
+- `Model::all()` — `$orderBy` parameter is now validated against a strict whitelist pattern (alphanumeric column names, optional `ASC`/`DESC`); throws `\InvalidArgumentException` on invalid input to prevent SQL injection
+- 56 tests, 75 assertions
 
 ## License
 
