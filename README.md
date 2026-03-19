@@ -2,7 +2,7 @@
 
 Database layer for the [Luany](https://github.com/luany-ecosystem) ecosystem.
 
-Provides a PDO connection factory, a thin query builder, an ActiveRecord model base, and a pure migration engine — with **zero dependencies on `luany/framework`**.
+Provides a PDO connection factory, a fluent query builder, an ActiveRecord model base, transaction support, and a pure migration engine — with **zero dependencies on `luany/framework`**.
 
 ---
 
@@ -44,11 +44,31 @@ $connection = Connection::make([
 $connection = Connection::fromPdo($pdo);
 ```
 
+#### Transactions
+
+```php
+// Manual
+$connection->beginTransaction();
+$connection->execute('UPDATE accounts SET balance = balance - 100 WHERE id = ?', [1]);
+$connection->execute('UPDATE accounts SET balance = balance + 100 WHERE id = ?', [2]);
+$connection->commit();
+
+// Automatic — commits on success, rolls back on exception
+$connection->transaction(function (Connection $conn) {
+    $conn->execute('UPDATE accounts SET balance = balance - 100 WHERE id = ?', [1]);
+    $conn->execute('UPDATE accounts SET balance = balance + 100 WHERE id = ?', [2]);
+});
+
+$connection->inTransaction(); // bool
+```
+
 ---
 
 ### QueryBuilder
 
-Thin prepared-statement wrapper. Can be used standalone or is used internally by `Model`.
+Fluent query builder with prepared-statement safety. Also supports raw queries for full SQL control.
+
+#### Fluent API
 
 ```php
 use Luany\Database\QueryBuilder;
@@ -56,10 +76,69 @@ use Luany\Database\QueryBuilder;
 $qb = new QueryBuilder($connection);
 
 // SELECT
+$users = $qb->table('users')
+    ->select('id', 'name', 'email')
+    ->where('active', '=', 1)
+    ->orderBy('name', 'ASC')
+    ->limit(10)
+    ->get();
+
+// First row or null
+$user = $qb->table('users')->where('email', '=', 'a@b.com')->first();
+
+// INSERT
+$qb->table('users')->insert(['name' => 'António', 'email' => 'a@b.com']);
+
+// UPDATE (returns affected row count)
+$qb->table('users')->where('id', '=', 42)->update(['name' => 'Ngola']);
+
+// DELETE (returns affected row count)
+$qb->table('users')->where('id', '=', 42)->delete();
+
+// COUNT
+$total = $qb->table('users')->where('active', '=', 1)->count();
+
+// EXISTS
+$exists = $qb->table('users')->where('email', '=', 'a@b.com')->exists();
+```
+
+#### Where Clauses
+
+```php
+// AND chaining
+$qb->table('users')->where('age', '>=', 18)->where('city', '=', 'Luanda')->get();
+
+// OR
+$qb->table('users')->where('role', '=', 'admin')->orWhere('role', '=', 'editor')->get();
+
+// WHERE IN
+$qb->table('users')->whereIn('id', [1, 2, 3])->get();
+
+// NULL checks
+$qb->table('users')->whereNull('deleted_at')->get();
+$qb->table('users')->whereNotNull('email')->get();
+```
+
+#### Ordering, Limit, Offset
+
+```php
+$qb->table('users')
+    ->orderBy('created_at', 'DESC')
+    ->orderBy('name', 'ASC')
+    ->limit(20)
+    ->offset(40)
+    ->get();
+```
+
+#### Raw Queries (backward-compatible)
+
+```php
+// SELECT → returns Result
 $users = $qb->query('SELECT * FROM users WHERE active = ?', [1])->fetchAll();
 $user  = $qb->query('SELECT * FROM users WHERE id = ?', [$id])->fetchOne();
+$qb->raw('SELECT * FROM users'); // alias for query()
 
-// INSERT / UPDATE / DELETE
+// INSERT / UPDATE / DELETE → returns affected row count
 $affected = $qb->statement('UPDATE users SET name = ? WHERE id = ?', ['António', 1]);
 ```
 
@@ -200,7 +279,7 @@ composer install
 ./vendor/bin/phpunit --testdox
 ```
 ```
-OK (56 tests, 75 assertions)
+OK (94 tests, 136 assertions)
 ```
 
 ---
@@ -237,8 +316,15 @@ src/
 
 ## Changelog
 
+### v0.2.0
+- **Fluent QueryBuilder** — `table()`, `select()`, `where()`, `orWhere()`, `whereIn()`, `whereNull()`, `whereNotNull()`, `orderBy()`, `limit()`, `offset()`, `get()`, `first()`, `insert()`, `update()`, `delete()`, `count()`, `exists()`, `raw()`
+- **Transaction support** — `Connection::beginTransaction()`, `commit()`, `rollBack()`, `transaction(callable)`, `inTransaction()`
+- **Model refactor** — `find()`, `all()`, `create()`, `save()`, `delete()` now use fluent QueryBuilder internally
+- Raw `query()` / `statement()` methods preserved for backward compatibility
+- 94 tests, 136 assertions
+
 ### v0.1.3
-- `Model::all()` — `$orderBy` parameter is now validated against a strict whitelist pattern (alphanumeric column names, optional `ASC`/`DESC`); throws `\InvalidArgumentException` on invalid input to prevent SQL injection
+- `Model::all()` — `$orderBy` validated against strict whitelist to prevent SQL injection
 - 56 tests, 75 assertions
 
 ## License
