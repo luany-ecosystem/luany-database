@@ -59,7 +59,39 @@ class ModelTest extends TestCase
         $this->assertContainsOnlyInstancesOf(ProductModel::class, $products);
     }
 
-    // ── where() ──────────────────────────────────────────────────────────────
+    public function test_all_accepts_valid_order_by(): void
+    {
+        $products = ProductModel::all('name ASC');
+        $this->assertCount(3, $products);
+        $this->assertSame('Gadget', $products[0]->name);
+    }
+
+    public function test_all_accepts_multiple_order_columns(): void
+    {
+        $products = ProductModel::all('price DESC, name ASC');
+        $this->assertCount(3, $products);
+        $this->assertSame('Gadget', $products[0]->name);
+    }
+
+    public function test_all_rejects_sql_injection_in_order_by(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        ProductModel::all('name; DROP TABLE products;--');
+    }
+
+    public function test_all_rejects_subquery_in_order_by(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        ProductModel::all('(SELECT 1)');
+    }
+
+    public function test_all_rejects_special_characters_in_order_by(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        ProductModel::all('name OR 1=1');
+    }
+
+    // ── where()
 
     public function test_where_filters_correctly(): void
     {

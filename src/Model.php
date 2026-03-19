@@ -100,13 +100,20 @@ abstract class Model
     /**
      * Return all records, optionally ordered.
      *
+     * Only allows safe column identifiers in the ORDER BY clause.
+     * Each term must match: column_name (ASC|DESC)?
+     * separated by commas. Anything else throws \InvalidArgumentException.
+     *
      * @return static[]
+     *
+     * @throws \InvalidArgumentException If $orderBy contains disallowed characters.
      */
     public static function all(string $orderBy = ''): array
     {
         $instance = new static();
         $sql      = "SELECT * FROM `{$instance->table}`";
         if ($orderBy !== '') {
+            static::validateOrderBy($orderBy);
             $sql .= " ORDER BY {$orderBy}";
         }
 
@@ -259,6 +266,30 @@ abstract class Model
     public function __isset(string $key): bool
     {
         return isset($this->attributes[$key]);
+    }
+
+    // ── Order-by validation ─────────────────────────────────────────────────
+
+    /**
+     * Validate the ORDER BY clause against a strict whitelist pattern.
+     *
+     * Allowed format: one or more comma-separated terms where each term is
+     *   column_name (ASC|DESC)?
+     * Column names must consist of [a-zA-Z0-9_] only.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private static function validateOrderBy(string $orderBy): void
+    {
+        // Pattern: word(ASC|DESC)? (, word(ASC|DESC)?)*
+        $pattern = '/^[a-zA-Z_][a-zA-Z0-9_]*(\s+(ASC|DESC))?(\s*,\s*[a-zA-Z_][a-zA-Z0-9_]*(\s+(ASC|DESC))?)*$/i';
+
+        if (!preg_match($pattern, trim($orderBy))) {
+            throw new \InvalidArgumentException(
+                "Invalid ORDER BY clause: \"{$orderBy}\". "
+                . 'Only column names (alphanumeric/underscore) with optional ASC/DESC are allowed.'
+            );
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
