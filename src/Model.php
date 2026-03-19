@@ -84,15 +84,23 @@ abstract class Model
     // ── Static query methods ─────────────────────────────────────────────────
 
     /**
+     * Get a fresh QueryBuilder instance scoped to this model's table.
+     */
+    protected static function newQuery(): QueryBuilder
+    {
+        $instance = new static();
+        return (new QueryBuilder(static::getConnection()))->table($instance->table);
+    }
+
+    /**
      * Find a record by primary key. Returns null if not found.
      */
     public static function find(int|string $id): ?static
     {
         $instance = new static();
-        $sql      = "SELECT * FROM `{$instance->table}` WHERE `{$instance->primaryKey}` = ? LIMIT 1";
-        $row      = (new QueryBuilder(static::getConnection()))
-                        ->query($sql, [$id])
-                        ->fetchOne();
+        $row = static::newQuery()
+            ->where($instance->primaryKey, '=', $id)
+            ->first();
 
         return $row ? $instance->hydrate($row) : null;
     }
@@ -110,16 +118,22 @@ abstract class Model
      */
     public static function all(string $orderBy = ''): array
     {
-        $instance = new static();
-        $sql      = "SELECT * FROM `{$instance->table}`";
+        $query = static::newQuery();
+
         if ($orderBy !== '') {
             static::validateOrderBy($orderBy);
-            $sql .= " ORDER BY {$orderBy}";
+            // Parse validated ORDER BY into fluent calls
+            foreach (explode(',', $orderBy) as $term) {
+                $parts  = preg_split('/\s+/', trim($term));
+                $column = $parts[0];
+                $dir    = strtoupper($parts[1] ?? 'ASC');
+                $query  = $query->orderBy($column, $dir);
+            }
         }
 
         return array_map(
             fn(array $row) => (new static())->hydrate($row),
-            (new QueryBuilder(static::getConnection()))->query($sql)->fetchAll()
+            $query->get()
         );
     }
 
@@ -155,15 +169,15 @@ abstract class Model
      */
     public static function count(string $conditions = '', array $bindings = []): int
     {
-        $instance = new static();
-        $sql      = "SELECT COUNT(*) FROM `{$instance->table}`";
-        if ($conditions !== '') {
-            $sql .= " WHERE {$conditions}";
+        if ($conditions === '') {
+            return static::newQuery()->count();
         }
 
-        $result = (new QueryBuilder(static::getConnection()))
-                      ->query($sql, $bindings)
-                      ->fetchColumn();
+        $instance = new static();
+        $sql      = "SELECT COUNT(*) FROM `{$instance->table}` WHERE {$conditions}";
+        $result   = (new QueryBuilder(static::getConnection()))
+                        ->query($sql, $bindings)
+                        ->fetchColumn();
 
         return (int) ($result[0] ?? 0);
     }
@@ -183,14 +197,9 @@ abstract class Model
             );
         }
 
-        $cols   = implode('`, `', array_keys($filtered));
-        $marks  = implode(', ', array_fill(0, count($filtered), '?'));
-        $sql    = "INSERT INTO `{$instance->table}` (`{$cols}`) VALUES ({$marks})";
+        static::newQuery()->insert($filtered);
 
-        $qb = new QueryBuilder(static::getConnection());
-        $qb->statement($sql, array_values($filtered));
-
-        $id = $qb->lastInsertId();
+        $id = (new QueryBuilder(static::getConnection()))->lastInsertId();
         return static::find((int) $id);
     }
 
@@ -213,9 +222,9 @@ abstract class Model
             return false;
         }
 
-        $sql = "DELETE FROM `{$this->table}` WHERE `{$this->primaryKey}` = ?";
-        (new QueryBuilder(static::getConnection()))
-            ->statement($sql, [$this->getAttribute($this->primaryKey)]);
+        static::newQuery()
+            ->where($this->primaryKey, '=', $this->getAttribute($this->primaryKey))
+            ->delete();
 
         $this->exists = false;
         return true;
@@ -297,14 +306,10 @@ abstract class Model
     private function performInsert(): bool
     {
         $filtered = $this->filterFillable($this->attributes);
-        $cols     = implode('`, `', array_keys($filtered));
-        $marks    = implode(', ', array_fill(0, count($filtered), '?'));
-        $sql      = "INSERT INTO `{$this->table}` (`{$cols}`) VALUES ({$marks})";
 
-        $qb = new QueryBuilder(static::getConnection());
-        $qb->statement($sql, array_values($filtered));
+        static::newQuery()->insert($filtered);
 
-        $this->attributes[$this->primaryKey] = (int) $qb->lastInsertId();
+        $this->attributes[$this->primaryKey] = (int) (new QueryBuilder(static::getConnection()))->lastInsertId();
         $this->exists = true;
         return true;
     }
@@ -312,11 +317,11 @@ abstract class Model
     private function performUpdate(): bool
     {
         $filtered = $this->filterFillable($this->attributes);
-        $sets     = implode(', ', array_map(fn(string $c) => "`{$c}` = ?", array_keys($filtered)));
-        $sql      = "UPDATE `{$this->table}` SET {$sets} WHERE `{$this->primaryKey}` = ?";
-        $values   = [...array_values($filtered), $this->getAttribute($this->primaryKey)];
 
-        (new QueryBuilder(static::getConnection()))->statement($sql, $values);
+        static::newQuery()
+            ->where($this->primaryKey, '=', $this->getAttribute($this->primaryKey))
+            ->update($filtered);
+
         return true;
     }
 

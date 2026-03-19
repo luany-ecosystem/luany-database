@@ -98,4 +98,61 @@ class Connection
     {
         return $this->pdo->lastInsertId();
     }
+
+    // ── Transactions ───────────────────────────────────────────────────────────
+
+    /**
+     * Begin a database transaction.
+     */
+    public function beginTransaction(): bool
+    {
+        return $this->pdo->beginTransaction();
+    }
+
+    /**
+     * Commit the current transaction.
+     */
+    public function commit(): bool
+    {
+        return $this->pdo->commit();
+    }
+
+    /**
+     * Roll back the current transaction.
+     */
+    public function rollBack(): bool
+    {
+        return $this->pdo->rollBack();
+    }
+
+    /**
+     * Execute a callback within a transaction.
+     * Automatically commits on success, rolls back on exception.
+     *
+     * @template T
+     * @param callable(Connection): T $callback
+     * @return T
+     * @throws \Throwable Re-throws after rollback
+     */
+    public function transaction(callable $callback): mixed
+    {
+        $this->beginTransaction();
+
+        try {
+            $result = $callback($this);
+            $this->commit();
+            return $result;
+        } catch (\Throwable $e) {
+            $this->rollBack();
+            throw $e;
+        }
+    }
+
+    /**
+     * Check if currently inside a transaction.
+     */
+    public function inTransaction(): bool
+    {
+        return $this->pdo->inTransaction();
+    }
 }
