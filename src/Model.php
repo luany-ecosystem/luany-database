@@ -48,25 +48,30 @@ abstract class Model
     protected string $primaryKey = 'id';
 
     /** Columns allowed for mass assignment */
+    /** @var array<int, string> */
     protected array $fillable = [];
 
     /** Columns excluded from toArray() and JSON output */
+    /** @var array<int, string> */
     protected array $hidden = [];
 
     // ── Internal state ───────────────────────────────────────────────────────
     // NOTE: protected (not private) so the SoftDeletes trait can access them.
 
     /** Raw column values from the database */
+    /** @var array<string, mixed> */
     protected array $attributes = [];
 
     /** Cached relation results, keyed by relation method name */
+    /** @var array<string, mixed> */
     protected array $relations  = [];
 
     /** Whether this instance exists in the database */
     protected bool  $exists     = false;
 
     /** Relations to eager-load on the next query */
-    private static array $eagerLoad = [];
+    /** @var array<string, mixed> */
+    protected static array $eagerLoad = [];
 
     // ── Shared connection ────────────────────────────────────────────────────
 
@@ -169,7 +174,7 @@ abstract class Model
      * ORDER BY is validated against a strict whitelist (column names + ASC/DESC only)
      * to prevent SQL injection.
      *
-     * @return static[]
+     * @return array<int, static>
      * @throws \InvalidArgumentException If $orderBy contains disallowed characters.
      */
     public static function all(string $orderBy = ''): array
@@ -200,8 +205,8 @@ abstract class Model
      * Return records matching a raw WHERE clause.
      *
      * @param  string  $conditions  e.g. 'email = ? AND active = ?'
-     * @param  array   $bindings    e.g. ['a@b.com', 1]
-     * @return static[]
+     * @param  array<int|string, mixed>  $bindings    e.g. ['a@b.com', 1]
+     * @return array<int, static>
      */
     public static function where(string $conditions, array $bindings = []): array
     {
@@ -216,6 +221,8 @@ abstract class Model
 
     /**
      * Return the first record matching a WHERE clause, or null.
+     *
+     * @param array<int|string, mixed> $bindings
      */
     public static function firstWhere(string $conditions, array $bindings = []): ?static
     {
@@ -225,6 +232,8 @@ abstract class Model
 
     /**
      * Count records, optionally with a WHERE clause.
+     *
+     * @param array<int|string, mixed> $bindings
      */
     public static function count(string $conditions = '', array $bindings = []): int
     {
@@ -232,7 +241,7 @@ abstract class Model
             return static::newQuery()->count();
         }
 
-        $instance = new static();
+        $instance = new static(); // used to read $table property
         $sql      = "SELECT COUNT(*) FROM `{$instance->table}` WHERE {$conditions}";
         $result   = (new QueryBuilder(static::getConnection()))
                         ->query($sql, $bindings)
@@ -244,6 +253,7 @@ abstract class Model
     /**
      * Create a new record and return the hydrated model instance.
      */
+    /** @param array<string, mixed> $data */
     public static function create(array $data): static
     {
         $instance = new static();
@@ -525,6 +535,10 @@ abstract class Model
         return true;
     }
 
+    /**
+     * @param array<string, mixed> $data
+     * @return array<string, mixed>
+     */
     private function filterFillable(array $data): array
     {
         if (empty($this->fillable)) {
@@ -550,6 +564,7 @@ abstract class Model
     /**
      * Mass-assign fillable attributes.
      */
+    /** @param array<string, mixed> $attributes */
     public function fill(array $attributes): void
     {
         foreach ($this->filterFillable($attributes) as $key => $value) {

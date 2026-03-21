@@ -15,6 +15,7 @@ class Result
     /**
      * Fetch the first row as an associative array, or null.
      */
+    /** @return array<string, mixed>|null */
     public function fetchOne(): ?array
     {
         $row = $this->stmt->fetch(\PDO::FETCH_ASSOC);

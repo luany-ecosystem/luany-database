@@ -26,9 +26,12 @@ class QueryBuilder
     private Connection $connection;
 
     private ?string $table   = null;
+    /** @var array<int, string> */
     private array $columns   = ['*'];
-    private array $wheres    = [];
-    private array $bindings  = [];
+    /** @var array<int, array<string, mixed>> */
+    private array $wheres   = [];
+    /** @var array<int|string, mixed> */
+    private array $bindings = [];
     private ?string $orderBy = null;
     private ?int $limitVal   = null;
     private ?int $offsetVal  = null;
@@ -83,6 +86,7 @@ class QueryBuilder
     /**
      * Add a WHERE IN clause.
      */
+    /** @param array<int, mixed> $values */
     public function whereIn(string $column, array $values): static
     {
         if (empty($values)) {
@@ -163,6 +167,7 @@ class QueryBuilder
     /**
      * Execute SELECT and return the first matching row, or null.
      */
+    /** @return array<string, mixed>|null */
     public function first(): ?array
     {
         $this->requireTable();
@@ -174,6 +179,7 @@ class QueryBuilder
     /**
      * Insert a row. Returns true on success.
      */
+    /** @param array<string, mixed> $data */
     public function insert(array $data): bool
     {
         $this->requireTable();
@@ -187,6 +193,7 @@ class QueryBuilder
     /**
      * Update matching rows. Returns number of affected rows.
      */
+    /** @param array<string, mixed> $data */
     public function update(array $data): int
     {
         $this->requireTable();
@@ -312,6 +319,7 @@ class QueryBuilder
     /**
      * Execute a raw SELECT and return a Result.
      */
+    /** @param array<int|string, mixed> $bindings */
     public function query(string $sql, array $bindings = []): Result
     {
         $stmt = $this->connection->execute($sql, $bindings);
@@ -321,6 +329,7 @@ class QueryBuilder
     /**
      * Alias for query() — execute raw SQL and return a Result.
      */
+    /** @param array<int|string, mixed> $bindings */
     public function raw(string $sql, array $bindings = []): Result
     {
         return $this->query($sql, $bindings);
@@ -330,6 +339,7 @@ class QueryBuilder
      * Execute a raw INSERT, UPDATE or DELETE.
      * Returns the number of affected rows.
      */
+    /** @param array<int|string, mixed> $bindings */
     public function statement(string $sql, array $bindings = []): int
     {
         $stmt = $this->connection->execute($sql, $bindings);

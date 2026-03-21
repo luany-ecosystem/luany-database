@@ -35,6 +35,7 @@ class Connection
      *
      * @throws \RuntimeException on connection failure
      */
+    /** @param array<string, mixed> $config */
     public static function make(array $config): static
     {
         $host    = $config['host']     ?? '127.0.0.1';
@@ -84,6 +85,7 @@ class Connection
     /**
      * Execute a prepared statement and return the statement.
      */
+    /** @param array<int|string, mixed> $bindings */
     public function execute(string $sql, array $bindings = []): \PDOStatement
     {
         $stmt = $this->pdo->prepare($sql);
