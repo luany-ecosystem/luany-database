@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — next/v1
+## [1.0.0] — 2026-03-23
 
 No changes in this phase. Package is stable at v0.3.0.
 
@@ -15,6 +15,7 @@ No changes in this phase. Package is stable at v0.3.0.
 ## [0.3.0] — Phase 3
 
 ### Added
+
 - `QueryBuilder` — fluent SQL builder. `table()`, `select()`, `where()`, `orWhere()`, `whereIn()`, `whereNull()`, `whereNotNull()`, `orderBy()`, `limit()`, `offset()`, `get()`, `first()`, `find()`, `count()`, `exists()`, `insert()`, `update()`, `delete()`.
 - `Model` — Active Record base class. `$table`, `$primaryKey`, `$fillable`, `$hidden`, `$casts`, `$timestamps`. Static methods: `all()`, `find()`, `create()`, `where()`. Instance methods: `save()`, `delete()`, `fill()`, `toArray()`.
 - Relations — `hasOne()`, `hasMany()`, `belongsTo()`. Lazy-loaded via magic property access.
@@ -26,4 +27,5 @@ No changes in this phase. Package is stable at v0.3.0.
 - Type casting in `Model` — `$casts = ['active' => 'bool', 'price' => 'float', 'qty' => 'int']`.
 
 ### Fixed
+
 - N+A — initial implementation, no prior bugs.
