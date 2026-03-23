@@ -2,7 +2,7 @@
 
 **PDO connection, fluent Query Builder, Active Record ORM, Relations, Pagination, Soft Deletes, and Migration engine for the Luany ecosystem.**
 
-**Version**: v0.3.0 &nbsp;|&nbsp; **PHP**: ≥ 8.1 &nbsp;|&nbsp; **License**: MIT  
+**Version**: v1.0.0 &nbsp;|&nbsp; **PHP**: >= 8.2 &nbsp;|&nbsp; **License**: MIT  
 **Author**: António Ambrósio Ngola &nbsp;|&nbsp; **Org**: [luany-ecosystem](https://github.com/luany-ecosystem)
 
 ---
