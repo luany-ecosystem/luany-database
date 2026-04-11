@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [1.1.0] — 2026-04-11
+
+### Added
+
+- `src/Seeder/Seeder.php` — abstract base class for all seeders. Defines `run(\PDO $pdo): void` contract. Exposes `call(string ...$seederClasses): void` for chaining seeders from within `DatabaseSeeder`. PDO injected via `setPdo()` before `run()` — managed by `SeederRunner`, not intended for manual use.
+- `src/Seeder/SeederRunner.php` — discovers and executes seeders from a given directory. Loads all PHP files in the seeders directory before running so `call()` chains always resolve. Accepts an optional output callback `fn(string $class, string $status): void`. Throws `\RuntimeException` if the target class is not found or does not extend `Seeder`.
+- `tests/Seeder/SeederRunnerTest.php` — 9 tests covering: single seeder execution, output callback, class-not-found, non-Seeder class, `call()` chaining, broken chain, and `loadAll()` ensuring all files are available before any seeder runs.
+
+**Tests: 178 → 187. Assertions: 284 → 296. All green.**
+
 ## [1.0.0] — 2026-03-23
 
 No changes in this phase. Package is stable at v0.3.0.
