@@ -1,8 +1,8 @@
 # luany/database
 
-**PDO connection, fluent Query Builder, Active Record ORM, Relations, Pagination, Soft Deletes, and Migration engine for the Luany ecosystem.**
+**PDO connection, fluent Query Builder, Active Record ORM, Relations, Pagination, Soft Deletes, Migration engine, and Seeders for the Luany ecosystem.**
 
-**Version**: v1.0.0 &nbsp;|&nbsp; **PHP**: >= 8.2 &nbsp;|&nbsp; **License**: MIT  
+**Version**: v1.1.0 &nbsp;|&nbsp; **PHP**: >= 8.2 &nbsp;|&nbsp; **License**: MIT
 **Author**: António Ambrósio Ngola &nbsp;|&nbsp; **Org**: [luany-ecosystem](https://github.com/luany-ecosystem)
 
 ---
@@ -24,7 +24,8 @@
    - [Soft Deletes](#45-soft-deletes)
 5. [Transactions](#5-transactions)
 6. [Migrations](#6-migrations)
-7. [Changelog](#7-changelog)
+7. [Seeders](#7-seeders)
+8. [Changelog](#8-changelog)
 
 ---
 
@@ -556,7 +557,94 @@ The `_migrations` table is created automatically on first use.
 
 ---
 
-## 7. Changelog
+## 7. Seeders
+
+Seeders live in `database/seeders/` and populate the database with initial or test data.
+
+### Defining a Seeder
+
+```php
+use Luany\Database\Seeder\Seeder;
+
+class UserSeeder extends Seeder
+{
+    public function run(\PDO $pdo): void
+    {
+        $stmt = $pdo->prepare("
+            INSERT IGNORE INTO `users` (`name`, `email`) VALUES (?, ?)
+        ");
+
+        $stmt->execute(['António Ngola', 'antonio@example.com']);
+        $stmt->execute(['Luany António',  'luany@example.com']);
+    }
+}
+```
+
+### DatabaseSeeder — entry point
+
+`DatabaseSeeder` is the root seeder. It chains other seeders via `$this->call()`:
+
+```php
+use Luany\Database\Seeder\Seeder;
+
+class DatabaseSeeder extends Seeder
+{
+    public function run(\PDO $pdo): void
+    {
+        $this->call(UserSeeder::class);
+        $this->call(ProductSeeder::class);
+    }
+}
+```
+
+All classes referenced via `call()` are loaded automatically before any seeder runs — no manual `require` needed.
+
+### SeederRunner
+
+```php
+use Luany\Database\Seeder\SeederRunner;
+
+$runner = new SeederRunner($pdo, '/path/to/database/seeders');
+
+// Run DatabaseSeeder (default entry point)
+$runner->run('DatabaseSeeder', function (string $class, string $status) {
+    echo "[{$status}] {$class}\n";
+});
+
+// Run a specific seeder
+$runner->run('UserSeeder');
+```
+
+`SeederRunner` loads all PHP files in the seeders directory before executing — `call()` chains always resolve regardless of file order.
+
+### Seeder base class
+
+| Method | Description |
+|--------|-------------|
+| `run(\PDO $pdo): void` | Abstract — implement your insert logic here |
+| `call(string ...$classes): void` | Chain one or more seeders. All receive the same PDO instance. |
+
+---
+
+## 8. Changelog
+
+### v1.1.0 — Seeders
+
+**New — `src/Seeder/Seeder.php`**
+- Abstract base class for all seeders. Defines `run(\PDO $pdo): void` contract.
+- `call(string ...$seederClasses): void` — chain seeders from within `DatabaseSeeder`. All called seeders receive the same PDO instance.
+- PDO injected via `setPdo()` before `run()` — managed by `SeederRunner`.
+
+**New — `src/Seeder/SeederRunner.php`**
+- Discovers and executes seeders from a given directory.
+- Loads all PHP files in the seeders directory before running — `call()` chains always resolve.
+- Optional output callback `fn(string $class, string $status): void`.
+- Throws `\RuntimeException` if target class not found or does not extend `Seeder`.
+
+**Tests added:** `SeederRunnerTest` (9 tests)  
+**Total: 178 → 187 tests, 284 → 296 assertions — all green.**
+
+---
 
 ### v0.3.0 — Phase 3: Relations, Eager Loading, Pagination, Soft Deletes
 
