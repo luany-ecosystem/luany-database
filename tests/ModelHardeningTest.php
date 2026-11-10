@@ -270,4 +270,25 @@ class ModelHardeningTest extends TestCase
             ['news', 'news'],
         ];
     }
+
+    public function test_update_respects_fillable_and_saves(): void
+    {
+        $m = HardAccount::create(['name' => 'x']);
+        $m->update(['name' => 'y', 'is_admin' => 1]);
+
+        $fresh = HardAccount::find($m->getKey());
+        $this->assertSame('y', $fresh->name);
+        $this->assertSame(0, (int) $fresh->is_admin);
+    }
+
+    public function test_refresh_reloads_from_database(): void
+    {
+        $m = HardAccount::create(['name' => 'x']);
+        $this->pdo->exec("UPDATE accounts SET name = 'changed' WHERE id = {$m->getKey()}");
+        $m->name = 'local';
+
+        $this->assertTrue($m->refresh());
+        $this->assertSame('changed', $m->name);
+        $this->assertFalse($m->isDirty());
+    }
 }

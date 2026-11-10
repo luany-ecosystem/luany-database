@@ -40,14 +40,31 @@ class Connection
     /** @param array<string, mixed> $config */
     public static function make(array $config): static
     {
+        $driver  = (string) ($config['driver'] ?? 'mysql');
         $host    = $config['host']     ?? '127.0.0.1';
-        $port    = $config['port']     ?? '3306';
         $name    = $config['database'] ?? '';
-        $user    = $config['username'] ?? 'root';
-        $pass    = $config['password'] ?? '';
-        $charset = $config['charset']  ?? 'utf8mb4';
+        $user    = $config['username'] ?? ($driver === 'mysql' ? 'root' : null);
+        $pass    = $config['password'] ?? ($driver === 'sqlite' ? null : '');
 
-        $dsn = "mysql:host={$host};port={$port};dbname={$name};charset={$charset}";
+        $dsn = match ($driver) {
+            'mysql'  => sprintf(
+                'mysql:host=%s;port=%s;dbname=%s;charset=%s',
+                $host,
+                $config['port'] ?? '3306',
+                $name,
+                $config['charset'] ?? 'utf8mb4'
+            ),
+            'pgsql'  => sprintf(
+                'pgsql:host=%s;port=%s;dbname=%s',
+                $host,
+                $config['port'] ?? '5432',
+                $name
+            ),
+            'sqlite' => 'sqlite:' . ($name === '' ? ':memory:' : $name),
+            default  => throw new \InvalidArgumentException(
+                "Unsupported database driver [{$driver}]. Supported: mysql, pgsql, sqlite."
+            ),
+        };
 
         try {
             $pdo = new \PDO($dsn, $user, $pass, [
@@ -121,38 +138,69 @@ class Connection
 
     // ── Transactions ───────────────────────────────────────────────────────────
 
+    /** Current transaction nesting level (0 = none). */
+    private int $transactionLevel = 0;
+
     /**
-     * Begin a database transaction.
+     * Begin a transaction, or a SAVEPOINT when one is already active.
      */
     public function beginTransaction(): bool
     {
-        return $this->pdo->beginTransaction();
+        if ($this->transactionLevel === 0) {
+            $ok = $this->pdo->inTransaction() ? true : $this->pdo->beginTransaction();
+        } else {
+            $this->pdo->exec('SAVEPOINT ' . $this->savepoint($this->transactionLevel + 1));
+            $ok = true;
+        }
+
+        $this->transactionLevel++;
+        return $ok;
     }
 
     /**
-     * Commit the current transaction.
+     * Commit the transaction, or release the innermost SAVEPOINT.
      */
     public function commit(): bool
     {
-        return $this->pdo->commit();
+        if ($this->transactionLevel <= 1) {
+            $this->transactionLevel = 0;
+            return $this->pdo->inTransaction() ? $this->pdo->commit() : true;
+        }
+
+        $this->pdo->exec('RELEASE SAVEPOINT ' . $this->savepoint($this->transactionLevel));
+        $this->transactionLevel--;
+        return true;
     }
 
     /**
-     * Roll back the current transaction.
+     * Roll back the transaction, or to the innermost SAVEPOINT.
      */
     public function rollBack(): bool
     {
-        return $this->pdo->rollBack();
+        if ($this->transactionLevel <= 1) {
+            $this->transactionLevel = 0;
+            return $this->pdo->inTransaction() ? $this->pdo->rollBack() : true;
+        }
+
+        $this->pdo->exec('ROLLBACK TO SAVEPOINT ' . $this->savepoint($this->transactionLevel));
+        $this->transactionLevel--;
+        return true;
     }
 
     /**
-     * Execute a callback within a transaction.
-     * Automatically commits on success, rolls back on exception.
+     * Current nesting level (0 when no transaction is active).
+     */
+    public function transactionLevel(): int
+    {
+        return $this->transactionLevel;
+    }
+
+    /**
+     * Run $callback inside a transaction. Nested calls use savepoints, so an
+     * inner failure only undoes the inner work when the caller catches it.
      *
-     * @template T
-     * @param callable(Connection): T $callback
-     * @return T
-     * @throws \Throwable Re-throws after rollback
+     * The original exception is always rethrown — a failure while rolling
+     * back (e.g. after an implicit DDL commit on MySQL) never masks it.
      */
     public function transaction(callable $callback): mixed
     {
@@ -163,9 +211,19 @@ class Connection
             $this->commit();
             return $result;
         } catch (\Throwable $e) {
-            $this->rollBack();
+            try {
+                $this->rollBack();
+            } catch (\Throwable) {
+                // Keep the original exception; the transaction is already gone.
+                $this->transactionLevel = max(0, $this->transactionLevel - 1);
+            }
             throw $e;
         }
+    }
+
+    private function savepoint(int $level): string
+    {
+        return 'luany_sp_' . $level;
     }
 
     /**

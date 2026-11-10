@@ -336,6 +336,41 @@ abstract class Model
     }
 
     /**
+     * Mass-assign (respecting $fillable / $guarded) and save.
+     *
+     * @param array<string, mixed> $attributes
+     */
+    public function update(array $attributes): bool
+    {
+        $this->fill($attributes);
+        return $this->save();
+    }
+
+    /**
+     * Reload attributes from the database (discarding unsaved changes and
+     * cached relations). Returns false when the row no longer exists.
+     */
+    public function refresh(): bool
+    {
+        $key = $this->getKey();
+
+        if ($key === null) {
+            return false;
+        }
+
+        $row = static::newQuery()->where($this->primaryKey, '=', $key)->first();
+
+        if ($row === null) {
+            return false;
+        }
+
+        $this->attributes = $row;
+        $this->relations  = [];
+        $this->syncOriginal();
+        return true;
+    }
+
+    /**
      * Hard-delete this record from the database.
      * NOTE: Overridden by the SoftDeletes trait to soft-delete instead.
      */

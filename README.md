@@ -122,10 +122,39 @@ $qb->table('users')
 // WHERE IN
 $qb->table('users')->whereIn('id', [1, 2, 3])->get();
 
-// WHERE NULL / NOT NULL
+// WHERE NULL / NOT NULL  (where('col', '=', null) also compiles to IS NULL)
 $qb->table('users')->whereNull('deleted_at')->get();
 $qb->table('users')->whereNotNull('email_verified_at')->get();
+
+// WHERE NOT IN
+$qb->table('users')->whereNotIn('role', ['banned', 'guest'])->get();
+
+// Grouped conditions: WHERE active = ? AND (city = ? OR city = ?)
+$qb->table('users')
+    ->where('active', '=', 1)
+    ->whereNested(fn ($q) => $q->where('city', '=', 'Luanda')->orWhere('city', '=', 'Lisbon'))
+    ->get();
 ```
+
+#### Identifier safety
+
+Every table, column and alias passed to the builder is validated and quoted
+(`users`, `users.id`, `users.*`, `name AS username`). Operators are limited to
+`= != <> < <= > >= LIKE NOT LIKE`. Anything else throws
+`InvalidArgumentException` — user input can never become SQL structure.
+
+When you genuinely need an expression, use the explicit raw methods and keep
+values in bindings:
+
+```php
+$qb->table('orders')
+    ->selectRaw('SUM(total) AS revenue')
+    ->whereRaw('created_at >= ?', ['2026-01-01'])
+    ->orderByRaw('revenue DESC')
+    ->get();
+```
+
+> Raw methods are **not** escaped. Never interpolate user input into them.
 
 #### ORDER BY, LIMIT, OFFSET
 
@@ -255,6 +284,25 @@ class User extends Model
 }
 ```
 
+**Mass assignment is closed by default.** `fill()`, `create()` and `update()`
+only accept columns listed in `$fillable`. A model with an empty `$fillable`
+accepts nothing unless you opt out explicitly:
+
+```php
+protected array $guarded = ['is_admin'];  // everything except is_admin
+protected array $guarded = [];            // everything (only for trusted input)
+```
+
+Direct property assignment (`$user->is_admin = 1; $user->save();`) and
+`forceFill()` are trusted and bypass the guard.
+
+**Non-incrementing keys** (UUID / string):
+
+```php
+protected string $primaryKey   = 'uuid';
+protected bool   $incrementing = false;
+```
+
 **Register the connection** (done once in your `DatabaseServiceProvider`):
 
 ```php
@@ -274,7 +322,10 @@ $user = User::find(42);
 $users = User::all();
 $users = User::all('name ASC, created_at DESC');
 
-// Raw WHERE clause
+// Fluent, fully escaped query scoped to the model (respects SoftDeletes)
+$rows = User::query()->where('active', '=', 1)->orderBy('name')->get();
+
+// Raw WHERE clause — $conditions is raw SQL: ALWAYS use ? placeholders
 $users = User::where('active = ? AND age > ?', [1, 18]);
 $user  = User::firstWhere('email = ?', ['antonio@example.com']); // ?static
 
@@ -289,8 +340,14 @@ $user = User::create(['name' => 'António', 'email' => 'antonio@example.com']);
 $user->name = 'António Ngola';
 $user->save();
 
-// Shorthand update
+// Shorthand update (mass assignment — respects $fillable)
 $user->update(['name' => 'António Ngola', 'email' => 'new@example.com']);
+
+// Dirty tracking — save() only writes changed columns
+$user->isDirty('name');   // bool
+$user->getDirty();        // ['name' => '...']
+$user->getOriginal('name');
+$user->refresh();         // reload from the database
 
 // Delete — hard-delete (overridden by SoftDeletes)
 $user->delete(); // bool
