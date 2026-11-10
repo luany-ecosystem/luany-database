@@ -4,7 +4,6 @@ namespace Luany\Database\Relations;
 
 use Luany\Database\Connection;
 use Luany\Database\Model;
-use Luany\Database\QueryBuilder;
 
 /**
  * HasOne
@@ -47,11 +46,12 @@ class HasOne extends Relation
      */
     public function getResults(): ?Model
     {
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
+        if ($this->localValue === null) {
+            return null;
+        }
 
-        $row = (new QueryBuilder($this->connection))
-            ->table($relatedInstance->getTable())
+
+        $row = ($this->relatedClass)::query()
             ->where($this->foreignKey, '=', $this->localValue)
             ->first();
 
@@ -73,15 +73,12 @@ class HasOne extends Relation
             fn($v) => $v !== null,
         )));
 
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
 
         // Map: localKeyValue → first matching related model
         $keyed = [];
 
         if (!empty($localValues)) {
-            $rows = (new QueryBuilder($this->connection))
-                ->table($relatedInstance->getTable())
+            $rows = ($this->relatedClass)::query()
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 
@@ -99,5 +96,13 @@ class HasOne extends Relation
             $localVal = $model->getAttribute($this->localKey);
             $model->setRelation($relationName, $keyed[$localVal] ?? null);
         }
+    }
+
+    /**
+     * Connection the relation was created with.
+     */
+    public function getConnection(): Connection
+    {
+        return $this->connection;
     }
 }

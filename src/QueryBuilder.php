@@ -142,12 +142,13 @@ class QueryBuilder
     /**
      * Add a raw WHERE clause. The SQL is NOT escaped — always use ? placeholders for values.
      *
-     * @param array<int, mixed> $bindings
+     * @param array<int|string, mixed> $bindings
      */
     public function whereRaw(string $sql, array $bindings = [], string $boolean = 'AND'): static
     {
         $this->wheres[]  = [$this->boolean($boolean), '(' . $sql . ')'];
-        $this->bindings  = array_merge($this->bindings, array_values($bindings));
+        // array_merge keeps string keys (named placeholders) and renumbers positional ones.
+        $this->bindings  = array_merge($this->bindings, $bindings);
         return $this;
     }
 

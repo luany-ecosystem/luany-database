@@ -47,9 +47,28 @@ abstract class Model
     protected string $table      = '';
     protected string $primaryKey = 'id';
 
-    /** Columns allowed for mass assignment */
-    /** @var array<int, string> */
+    /** Whether the primary key is an auto-incrementing integer. */
+    protected bool $incrementing = true;
+
+    /** Primary key type when $incrementing is true: "int" or "string". */
+    protected string $keyType = 'int';
+
+    /**
+     * Columns allowed for mass assignment (fill(), create()).
+     * When non-empty it is the only thing that matters.
+     *
+     * @var array<int, string>
+     */
     protected array $fillable = [];
+
+    /**
+     * Columns blocked from mass assignment when $fillable is empty.
+     * The default ['*'] blocks everything: a model must opt in through
+     * $fillable, or explicitly set $guarded = [] to allow every column.
+     *
+     * @var array<int, string>
+     */
+    protected array $guarded = ['*'];
 
     /** Columns excluded from toArray() and JSON output */
     /** @var array<int, string> */
@@ -61,6 +80,10 @@ abstract class Model
     /** Raw column values from the database */
     /** @var array<string, mixed> */
     protected array $attributes = [];
+
+    /** Attribute values as last loaded from / persisted to the database */
+    /** @var array<string, mixed> */
+    protected array $original = [];
 
     /** Cached relation results, keyed by relation method name */
     /** @var array<string, mixed> */
@@ -125,7 +148,7 @@ abstract class Model
     /**
      * Set the eager-load relations for the next query.
      * Called by EagerProxy before delegating to all() or find().
-     * Consumed and reset by eagerLoadRelations() after the query executes.
+     * Consumed by find()/all() before the query executes.
      *
      * @internal Used by EagerProxy — do not call directly.
      *
@@ -134,6 +157,21 @@ abstract class Model
     public static function setEagerLoad(array $relations): void
     {
         static::$eagerLoad = $relations;
+    }
+
+    /**
+     * Take (and clear) the pending eager-load list.
+     *
+     * Consumed BEFORE the query runs so that an early return or an exception
+     * can never leak the list into an unrelated later query.
+     *
+     * @return array<int|string, mixed>
+     */
+    private static function pullEagerLoad(): array
+    {
+        $relations         = static::$eagerLoad;
+        static::$eagerLoad = [];
+        return $relations;
     }
 
     // ── Static query methods ─────────────────────────────────────────────────
@@ -149,10 +187,22 @@ abstract class Model
     }
 
     /**
+     * Public entry point to a scoped QueryBuilder for this model's table
+     * (respects global scopes such as SoftDeletes).
+     *
+     *   $rows = User::query()->where('active', '=', 1)->orderBy('name')->get();
+     */
+    public static function query(): QueryBuilder
+    {
+        return static::newQuery();
+    }
+
+    /**
      * Find a record by primary key. Returns null if not found.
      */
     public static function find(int|string $id): ?static
     {
+        $with     = static::pullEagerLoad();
         $instance = new static();
         $row = static::newQuery()
             ->where($instance->primaryKey, '=', $id)
@@ -163,7 +213,7 @@ abstract class Model
         }
 
         $model = static::hydrateFromRow($row);
-        static::eagerLoadRelations([$model]);
+        static::eagerLoadRelations([$model], $with);
 
         return $model;
     }
@@ -179,6 +229,7 @@ abstract class Model
      */
     public static function all(string $orderBy = ''): array
     {
+        $with  = static::pullEagerLoad();
         $query = static::newQuery();
 
         if ($orderBy !== '') {
@@ -196,7 +247,7 @@ abstract class Model
             $query->get()
         );
 
-        static::eagerLoadRelations($models);
+        static::eagerLoadRelations($models, $with);
 
         return $models;
     }
@@ -204,18 +255,19 @@ abstract class Model
     /**
      * Return records matching a raw WHERE clause.
      *
+     * WARNING: $conditions is raw SQL. Never interpolate user input into it —
+     * always use ? placeholders and pass values in $bindings.
+     * For a fully escaped API use static::query()->where(column, operator, value).
+     *
      * @param  string  $conditions  e.g. 'email = ? AND active = ?'
      * @param  array<int|string, mixed>  $bindings    e.g. ['a@b.com', 1]
      * @return array<int, static>
      */
     public static function where(string $conditions, array $bindings = []): array
     {
-        $instance = new static();
-        $sql      = "SELECT * FROM `{$instance->table}` WHERE {$conditions}";
-
         return array_map(
             fn(array $row) => static::hydrateFromRow($row),
-            (new QueryBuilder(static::getConnection()))->query($sql, $bindings)->fetchAll()
+            static::newQuery()->whereRaw($conditions, $bindings)->get()
         );
     }
 
@@ -241,13 +293,7 @@ abstract class Model
             return static::newQuery()->count();
         }
 
-        $instance = new static(); // used to read $table property
-        $sql      = "SELECT COUNT(*) FROM `{$instance->table}` WHERE {$conditions}";
-        $result   = (new QueryBuilder(static::getConnection()))
-                        ->query($sql, $bindings)
-                        ->fetchColumn();
-
-        return (int) ($result[0] ?? 0);
+        return static::newQuery()->whereRaw($conditions, $bindings)->count();
     }
 
     /**
@@ -256,20 +302,27 @@ abstract class Model
     /** @param array<string, mixed> $data */
     public static function create(array $data): static
     {
-        $instance = new static();
-        $filtered = $instance->filterFillable($data);
+        $model = new static();
+        $model->fill($data);
 
-        if (empty($filtered)) {
+        if ($model->attributes === []) {
             throw new \InvalidArgumentException(
                 'No fillable attributes provided for ' . static::class . '. '
-                . 'Set the $fillable property or pass valid column names.'
+                . 'List the columns in $fillable (or set $guarded = [] to allow all).'
             );
         }
 
-        static::newQuery()->insert($filtered);
+        $model->save();
 
-        $id = (new QueryBuilder(static::getConnection()))->lastInsertId();
-        return static::find((int) $id);
+        $key = $model->getKey();
+        $fresh = $key !== null ? static::newQuery()->where($model->primaryKey, '=', $key)->first() : null;
+
+        if ($fresh !== null) {
+            $model->attributes = $fresh;
+            $model->syncOriginal();
+        }
+
+        return $model;
     }
 
     // ── Instance methods ─────────────────────────────────────────────────────
@@ -444,18 +497,23 @@ abstract class Model
 
     public function __get(string $key): mixed
     {
+        // Column values always win over methods (a column named "count" or
+        // "delete" must not call Model::count()/delete()).
+        if (array_key_exists($key, $this->attributes)) {
+            return $this->attributes[$key];
+        }
+
         // Already-loaded relation result (cached)
         if (array_key_exists($key, $this->relations)) {
             return $this->relations[$key];
         }
 
         // Relation method → lazy-load and cache
-        if (method_exists($this, $key)) {
+        if (static::isRelationMethod($key)) {
             return $this->getRelation($key);
         }
 
-        // Raw attribute
-        return $this->attributes[$key] ?? null;
+        return null;
     }
 
     public function __set(string $key, mixed $value): void
@@ -465,7 +523,66 @@ abstract class Model
 
     public function __isset(string $key): bool
     {
-        return isset($this->attributes[$key]);
+        if (array_key_exists($key, $this->attributes)) {
+            return $this->attributes[$key] !== null;
+        }
+
+        if (array_key_exists($key, $this->relations)) {
+            return $this->relations[$key] !== null;
+        }
+
+        if (static::isRelationMethod($key)) {
+            return $this->getRelation($key) !== null;
+        }
+
+        return false;
+    }
+
+    public function __unset(string $key): void
+    {
+        unset($this->attributes[$key], $this->relations[$key]);
+    }
+
+    /** @var array<string, array<string, bool>> */
+    private static array $relationMethodCache = [];
+
+    /**
+     * Whether $name is a user-defined relation method on this model:
+     * a non-static, public, zero-required-argument method not declared by
+     * the base Model or by a framework trait (e.g. SoftDeletes).
+     */
+    protected static function isRelationMethod(string $name): bool
+    {
+        $class = static::class;
+
+        if (isset(self::$relationMethodCache[$class][$name])) {
+            return self::$relationMethodCache[$class][$name];
+        }
+
+        $result = false;
+
+        if (method_exists($class, $name)) {
+            $method   = new \ReflectionMethod($class, $name);
+            $declarer = $method->getDeclaringClass()->getName();
+
+            $result = !$method->isStatic()
+                && $method->isPublic()
+                && $method->getNumberOfRequiredParameters() === 0
+                && $declarer !== self::class
+                && !method_exists(Concerns\SoftDeletes::class, $name);
+
+            if ($result) {
+                $type = $method->getReturnType();
+                // Methods typed with a non-Relation return type are not relations.
+                if ($type instanceof \ReflectionNamedType && !$type->isBuiltin()) {
+                    $result = is_a($type->getName(), Relation::class, true);
+                } elseif ($type instanceof \ReflectionNamedType && $type->isBuiltin()) {
+                    $result = in_array($type->getName(), ['array', 'mixed'], true);
+                }
+            }
+        }
+
+        return self::$relationMethodCache[$class][$name] = $result;
     }
 
     // ── Order-by validation ─────────────────────────────────────────────────
@@ -505,34 +622,118 @@ abstract class Model
     {
         $instance             = new static();
         $instance->attributes = $row;
+        $instance->original   = $row;
         $instance->exists     = true;
         return $instance;
     }
 
+    // ── Keys & dirty tracking ─────────────────────────────────────────────────
+
+    /**
+     * Value of the primary key, or null for unsaved models.
+     */
+    public function getKey(): mixed
+    {
+        return $this->attributes[$this->primaryKey] ?? null;
+    }
+
+    /**
+     * Attributes changed since the model was loaded / last saved.
+     *
+     * @return array<string, mixed>
+     */
+    public function getDirty(): array
+    {
+        $dirty = [];
+        foreach ($this->attributes as $key => $value) {
+            if (!array_key_exists($key, $this->original) || $this->original[$key] !== $value) {
+                $dirty[$key] = $value;
+            }
+        }
+        return $dirty;
+    }
+
+    /**
+     * Whether the model (or a given attribute) has unsaved changes.
+     */
+    public function isDirty(?string $attribute = null): bool
+    {
+        $dirty = $this->getDirty();
+        return $attribute === null ? $dirty !== [] : array_key_exists($attribute, $dirty);
+    }
+
+    /**
+     * Original value of an attribute (or all originals).
+     */
+    public function getOriginal(?string $attribute = null): mixed
+    {
+        return $attribute === null ? $this->original : ($this->original[$attribute] ?? null);
+    }
+
+    protected function syncOriginal(): void
+    {
+        $this->original = $this->attributes;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    /**
+     * INSERT every attribute set on the model. $fillable only guards mass
+     * assignment (fill()/create()); direct property assignment is trusted.
+     */
     private function performInsert(): bool
     {
-        $filtered = $this->filterFillable($this->attributes);
+        static::newQuery()->insert($this->attributes);
 
-        static::newQuery()->insert($filtered);
-
-        $this->attributes[$this->primaryKey] =
-            (int) (new QueryBuilder(static::getConnection()))->lastInsertId();
+        if ($this->incrementing && $this->getKey() === null) {
+            $id = static::getConnection()->lastInsertId();
+            $this->attributes[$this->primaryKey] = $this->keyType === 'int' ? (int) $id : $id;
+        }
 
         $this->exists = true;
+        $this->syncOriginal();
         return true;
     }
 
+    /**
+     * UPDATE only the attributes that changed since load / last save.
+     */
     private function performUpdate(): bool
     {
-        $filtered = $this->filterFillable($this->attributes);
+        $dirty = $this->getDirty();
+
+        if ($dirty === []) {
+            return true;
+        }
+
+        $key = $this->original[$this->primaryKey] ?? $this->getKey();
 
         static::newQuery()
-            ->where($this->primaryKey, '=', $this->getAttribute($this->primaryKey))
-            ->update($filtered);
+            ->where($this->primaryKey, '=', $key)
+            ->update($dirty);
 
+        $this->syncOriginal();
         return true;
+    }
+
+    /**
+     * Whether a column may be mass-assigned.
+     */
+    public function isFillable(string $key): bool
+    {
+        if (in_array($key, $this->fillable, true)) {
+            return true;
+        }
+
+        if ($this->fillable !== []) {
+            return false;
+        }
+
+        if (in_array('*', $this->guarded, true)) {
+            return false;
+        }
+
+        return !in_array($key, $this->guarded, true);
     }
 
     /**
@@ -541,10 +742,7 @@ abstract class Model
      */
     private function filterFillable(array $data): array
     {
-        if (empty($this->fillable)) {
-            return $data;
-        }
-        return array_intersect_key($data, array_flip($this->fillable));
+        return array_filter($data, fn ($key) => $this->isFillable((string) $key), ARRAY_FILTER_USE_KEY);
     }
 
     /**
@@ -573,12 +771,25 @@ abstract class Model
     }
 
     /**
+     * Assign attributes bypassing $fillable / $guarded. Only for trusted data.
+     *
+     * @param array<string, mixed> $attributes
+     */
+    public function forceFill(array $attributes): static
+    {
+        foreach ($attributes as $key => $value) {
+            $this->attributes[$key] = $value;
+        }
+        return $this;
+    }
+
+    /**
      * Guess FK for hasOne/hasMany: table 'users' → 'user_id'.
      * For irregular plurals, pass $foreignKey explicitly.
      */
     private function guessForeignKey(): string
     {
-        return rtrim($this->table, 's') . '_id';
+        return static::singularize($this->table) . '_id';
     }
 
     /**
@@ -586,7 +797,39 @@ abstract class Model
      */
     private function guessRelatedForeignKey(Model $related): string
     {
-        return rtrim($related->table, 's') . '_id';
+        return static::singularize($related->table) . '_id';
+    }
+
+    /**
+     * Small English singularizer for foreign-key guessing.
+     * Covers common table names; pass keys explicitly for anything exotic.
+     */
+    public static function singularize(string $word): string
+    {
+        static $irregular = [
+            'people'   => 'person',
+            'children' => 'child',
+            'men'      => 'man',
+            'women'    => 'woman',
+            'statuses' => 'status',
+            'buses'    => 'bus',
+            'news'     => 'news',
+            'series'   => 'series',
+        ];
+
+        $lower = strtolower($word);
+
+        if (isset($irregular[$lower])) {
+            return $irregular[$lower];
+        }
+
+        return match (true) {
+            str_ends_with($lower, 'ies') && strlen($lower) > 3              => substr($word, 0, -3) . 'y',
+            (bool) preg_match('/(ss|sh|ch|x|z)es$/', $lower)                 => substr($word, 0, -2),
+            (bool) preg_match('/(ss|us|is)$/', $lower)                        => $word,
+            str_ends_with($lower, 's')                                        => substr($word, 0, -1),
+            default                                                           => $word,
+        };
     }
 
     /**
@@ -608,16 +851,13 @@ abstract class Model
     // ── Eager loading internals ───────────────────────────────────────────────
 
     /**
-     * Eager-load all registered relations on a set of models.
-     * Resets static::$eagerLoad after loading.
+     * Eager-load the given relations on a set of models.
      *
-     * @param static[] $models
+     * @param static[]                 $models
+     * @param array<int|string, mixed> $relations
      */
-    private static function eagerLoadRelations(array $models): void
+    private static function eagerLoadRelations(array $models, array $relations): void
     {
-        $relations         = static::$eagerLoad;
-        static::$eagerLoad = [];
-
         if (empty($relations) || empty($models)) {
             return;
         }

@@ -4,7 +4,6 @@ namespace Luany\Database\Relations;
 
 use Luany\Database\Connection;
 use Luany\Database\Model;
-use Luany\Database\QueryBuilder;
 
 /**
  * BelongsTo
@@ -52,11 +51,8 @@ class BelongsTo extends Relation
             return null;
         }
 
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
 
-        $row = (new QueryBuilder($this->connection))
-            ->table($relatedInstance->getTable())
+        $row = ($this->relatedClass)::query()
             ->where($this->ownerKey, '=', $this->foreignValue)
             ->first();
 
@@ -78,15 +74,12 @@ class BelongsTo extends Relation
             fn($v) => $v !== null,
         )));
 
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
 
         // Map: ownerKeyValue → related model instance
         $keyed = [];
 
         if (!empty($foreignValues)) {
-            $rows = (new QueryBuilder($this->connection))
-                ->table($relatedInstance->getTable())
+            $rows = ($this->relatedClass)::query()
                 ->whereIn($this->ownerKey, $foreignValues)
                 ->get();
 
@@ -101,5 +94,13 @@ class BelongsTo extends Relation
             $fkVal = $model->getAttribute($this->foreignKey);
             $model->setRelation($relationName, $keyed[$fkVal] ?? null);
         }
+    }
+
+    /**
+     * Connection the relation was created with.
+     */
+    public function getConnection(): Connection
+    {
+        return $this->connection;
     }
 }
