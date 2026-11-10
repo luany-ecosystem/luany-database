@@ -25,6 +25,8 @@ class Connection
 {
     private \PDO $pdo;
 
+    private ?Grammar $grammar = null;
+
     private function __construct(\PDO $pdo)
     {
         $this->pdo = $pdo;
@@ -80,6 +82,22 @@ class Connection
     public function getPdo(): \PDO
     {
         return $this->pdo;
+    }
+
+    /**
+     * PDO driver name ("mysql", "sqlite", "pgsql", ...).
+     */
+    public function getDriverName(): string
+    {
+        return (string) $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+    }
+
+    /**
+     * Grammar used to quote identifiers for this connection's driver.
+     */
+    public function getGrammar(): Grammar
+    {
+        return $this->grammar ??= new Grammar($this->getDriverName());
     }
 
     /**
