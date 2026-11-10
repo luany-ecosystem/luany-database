@@ -4,7 +4,6 @@ namespace Luany\Database\Relations;
 
 use Luany\Database\Connection;
 use Luany\Database\Model;
-use Luany\Database\QueryBuilder;
 
 /**
  * HasMany
@@ -49,11 +48,12 @@ class HasMany extends Relation
      */
     public function getResults(): array
     {
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
+        if ($this->localValue === null) {
+            return [];
+        }
 
-        $rows = (new QueryBuilder($this->connection))
-            ->table($relatedInstance->getTable())
+
+        $rows = ($this->relatedClass)::query()
             ->where($this->foreignKey, '=', $this->localValue)
             ->get();
 
@@ -78,15 +78,12 @@ class HasMany extends Relation
             fn($v) => $v !== null,
         )));
 
-        /** @var Model $relatedInstance */
-        $relatedInstance = new $this->relatedClass();
 
         // Map: localKeyValue → array of related model instances
         $grouped = [];
 
         if (!empty($localValues)) {
-            $rows = (new QueryBuilder($this->connection))
-                ->table($relatedInstance->getTable())
+            $rows = ($this->relatedClass)::query()
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 
@@ -101,5 +98,13 @@ class HasMany extends Relation
             $localVal = $model->getAttribute($this->localKey);
             $model->setRelation($relationName, $grouped[$localVal] ?? []);
         }
+    }
+
+    /**
+     * Connection the relation was created with.
+     */
+    public function getConnection(): Connection
+    {
+        return $this->connection;
     }
 }

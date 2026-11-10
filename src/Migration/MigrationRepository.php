@@ -31,6 +31,15 @@ class MigrationRepository
                     `ran_at`    DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ");
+        } elseif ($driver === 'pgsql') {
+            $this->pdo->exec('
+                CREATE TABLE IF NOT EXISTS "_migrations" (
+                    "id"        SERIAL PRIMARY KEY,
+                    "migration" VARCHAR(255) NOT NULL,
+                    "batch"     INTEGER NOT NULL,
+                    "ran_at"    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ');
         } else {
             $this->pdo->exec("
                 CREATE TABLE IF NOT EXISTS `_migrations` (
@@ -51,7 +60,7 @@ class MigrationRepository
     public function getRan(): array
     {
         $stmt = $this->pdo->query(
-            "SELECT migration FROM `" . self::TABLE . "` ORDER BY id ASC"
+            "SELECT migration FROM " . $this->table() . " ORDER BY id ASC"
         );
         return $stmt->fetchAll(\PDO::FETCH_COLUMN);
     }
@@ -64,7 +73,7 @@ class MigrationRepository
     public function getBatch(int $batch): array
     {
         $stmt = $this->pdo->prepare(
-            "SELECT migration FROM `" . self::TABLE . "` WHERE batch = ? ORDER BY id DESC"
+            "SELECT migration FROM " . $this->table() . " WHERE batch = ? ORDER BY id DESC"
         );
         $stmt->execute([$batch]);
         return $stmt->fetchAll(\PDO::FETCH_COLUMN);
@@ -77,7 +86,7 @@ class MigrationRepository
     public function getLastBatch(): int
     {
         $row = $this->pdo->query(
-            "SELECT COALESCE(MAX(batch), 0) FROM `" . self::TABLE . "`"
+            "SELECT COALESCE(MAX(batch), 0) FROM " . $this->table()
         )->fetchColumn();
 
         return (int) $row;
@@ -89,7 +98,7 @@ class MigrationRepository
     public function record(string $migration, int $batch): void
     {
         $stmt = $this->pdo->prepare(
-            "INSERT INTO `" . self::TABLE . "` (migration, batch) VALUES (?, ?)"
+            "INSERT INTO " . $this->table() . " (migration, batch) VALUES (?, ?)"
         );
         $stmt->execute([$migration, $batch]);
     }
@@ -100,8 +109,29 @@ class MigrationRepository
     public function delete(string $migration): void
     {
         $stmt = $this->pdo->prepare(
-            "DELETE FROM `" . self::TABLE . "` WHERE migration = ?"
+            "DELETE FROM " . $this->table() . " WHERE migration = ?"
         );
         $stmt->execute([$migration]);
+    }
+
+    /**
+     * Map of migration name → batch number.
+     *
+     * @return array<string, int>
+     */
+    public function getBatches(): array
+    {
+        $stmt = $this->pdo->query("SELECT migration, batch FROM " . $this->table() . " ORDER BY id ASC");
+        $map  = [];
+        foreach ($stmt->fetchAll(\PDO::FETCH_ASSOC) as $row) {
+            $map[(string) $row['migration']] = (int) $row['batch'];
+        }
+        return $map;
+    }
+
+    private function table(): string
+    {
+        $driver = (string) $this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME);
+        return (new \Luany\Database\Grammar($driver))->wrapTable(self::TABLE);
     }
 }

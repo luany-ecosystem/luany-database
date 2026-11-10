@@ -106,4 +106,76 @@ class TransactionTest extends TestCase
 
         $this->assertFalse($this->connection->inTransaction());
     }
+
+    // ── Nested transactions (issue #10) ──────────────────────────────────────
+
+    private function balance(string $name): float
+    {
+        $row = $this->connection->execute('SELECT balance FROM accounts WHERE name = ?', [$name])->fetch(\PDO::FETCH_ASSOC);
+        return (float) $row['balance'];
+    }
+
+    public function test_nested_transaction_uses_savepoints(): void
+    {
+        $this->connection->transaction(function (Connection $c) {
+            $c->execute("UPDATE accounts SET balance = 1 WHERE name = 'Antonio'");
+
+            $this->assertSame(2, $c->transaction(function (Connection $inner) {
+                $inner->execute("UPDATE accounts SET balance = 2 WHERE name = 'Ambrosio'");
+                return $inner->transactionLevel();
+            }));
+        });
+
+        $this->assertSame(1.0, $this->balance('Antonio'));
+        $this->assertSame(2.0, $this->balance('Ambrosio'));
+        $this->assertSame(0, $this->connection->transactionLevel());
+    }
+
+    public function test_inner_failure_only_rolls_back_inner_work(): void
+    {
+        $this->connection->transaction(function (Connection $c) {
+            $c->execute("UPDATE accounts SET balance = 1 WHERE name = 'Antonio'");
+
+            try {
+                $c->transaction(function (Connection $inner) {
+                    $inner->execute("UPDATE accounts SET balance = 2 WHERE name = 'Ambrosio'");
+                    throw new \RuntimeException('inner');
+                });
+            } catch (\RuntimeException) {
+            }
+        });
+
+        $this->assertSame(1.0, $this->balance('Antonio'));
+        $this->assertSame(50.0, $this->balance('Ambrosio'));
+    }
+
+    public function test_outer_failure_rolls_back_everything(): void
+    {
+        try {
+            $this->connection->transaction(function (Connection $c) {
+                $c->transaction(fn (Connection $inner) => $inner->execute("UPDATE accounts SET balance = 2 WHERE name = 'Ambrosio'"));
+                throw new \RuntimeException('outer');
+            });
+        } catch (\RuntimeException) {
+        }
+
+        $this->assertSame(50.0, $this->balance('Ambrosio'));
+        $this->assertFalse($this->connection->inTransaction());
+        $this->assertSame(0, $this->connection->transactionLevel());
+    }
+
+    public function test_original_exception_survives_failed_rollback(): void
+    {
+        try {
+            $this->connection->transaction(function (Connection $c) {
+                // Simulate an implicit commit (e.g. MySQL DDL) ending the transaction.
+                $c->getPdo()->commit();
+                throw new \LogicException('original');
+            });
+            $this->fail('Expected exception');
+        } catch (\LogicException $e) {
+            $this->assertSame('original', $e->getMessage());
+        }
+        $this->assertSame(0, $this->connection->transactionLevel());
+    }
 }

@@ -64,4 +64,17 @@ class ConnectionTest extends TestCase
         $conn = Connection::fromPdo($pdo);
         $this->assertSame($pdo, $conn->getPdo());
     }
+
+    public function test_make_supports_sqlite_driver(): void
+    {
+        $conn = Connection::make(['driver' => 'sqlite', 'database' => ':memory:']);
+        $this->assertSame('sqlite', $conn->getDriverName());
+        $this->assertSame('`users`', $conn->getGrammar()->wrapTable('users'));
+    }
+
+    public function test_make_rejects_unknown_driver(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        Connection::make(['driver' => 'oracle']);
+    }
 }

@@ -6,6 +6,40 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.2.0
+
+### Security
+
+- **SQL injection through identifiers and operators fixed (#2).** Tables, columns, aliases and `insert`/`update` keys are validated and quoted by a new driver-aware `Grammar`; operators are whitelisted. Invalid input throws `InvalidArgumentException`.
+- **Mass assignment now fails closed (#3).** A model with an empty `$fillable` is fully guarded (`$guarded = ['*']`). Opt in with `$fillable`, a `$guarded` blacklist, or `$guarded = []`.
+- `SoftDeletes` is applied to `Model::where()`, `firstWhere()`, `count()`, and lazy/eager relations (#7). Raw conditions are parenthesised so `OR` cannot escape the scope.
+
+### Added
+
+- `QueryBuilder`: `selectRaw()`, `whereRaw()`, `orWhereRaw()`, `orderByRaw()`, `whereNested()`, `orWhereNested()`, `whereNotIn()`, `orderByDesc()`.
+- `Model`: `query()`, `update()`, `refresh()`, `forceFill()`, `isFillable()`, `getKey()`, `getDirty()`, `isDirty()`, `getOriginal()`, `$guarded`, `$incrementing`, `$keyType`, `singularize()`.
+- `Connection`: nested transactions with savepoints, `transactionLevel()`, `getDriverName()`, `getGrammar()`; `make()` supports `driver` = `mysql` | `pgsql` | `sqlite`.
+- Migrations: anonymous-class migrations, `rollback($output, $steps)`, `reset()`, PostgreSQL support.
+- `LICENSE` (MIT).
+
+### Fixed
+
+- `where(col, '=', null)` compiles to `IS NULL` (#9).
+- `save()` persists directly assigned attributes and updates only dirty columns (#4).
+- Columns named like base methods (`count`, `delete`, …) are read correctly; `isset()`/`empty()` work on relations (#5).
+- Eager-load state can no longer leak into later queries (#6).
+- `create()` works with UUID / string primary keys (#8).
+- Nested `transaction()` no longer throws; the original exception is never masked by a failed rollback (#10).
+- `dropAll()` works on SQLite; migrations run atomically on SQLite/PostgreSQL; duplicate class names give a clear error; any timestamp format is accepted (#11).
+- Foreign-key guessing handles `addresses`, `categories`, `statuses`, … (#12).
+
+### Upgrade notes
+
+- Models that relied on an empty `$fillable` accepting every column must now declare `$fillable` (recommended) or `$guarded = []`.
+- Identifiers that are not plain `[A-Za-z_][A-Za-z0-9_]*` (optionally `table.column` / `AS alias`) now throw. Move expressions to the `*Raw()` methods.
+
+---
+
 ## [1.1.0] — 2026-04-11
 
 ### Added

@@ -24,14 +24,17 @@ use Luany\Database\PaginationResult;
 class QueryBuilder
 {
     private Connection $connection;
+    private Grammar $grammar;
 
     private ?string $table   = null;
-    /** @var array<int, string> */
+    /** @var array<int, string> Compiled SELECT fragments (already quoted) */
     private array $columns   = ['*'];
-    /** @var array<int, array<string, mixed>> */
+    /** @var array<int, array{0: string, 1: string}> [boolean, compiled clause] */
     private array $wheres   = [];
     /** @var array<int|string, mixed> */
     private array $bindings = [];
+    /** @var array<int, mixed> Bindings for selectRaw() expressions (precede WHERE bindings) */
+    private array $selectBindings = [];
     private ?string $orderBy = null;
     private ?int $limitVal   = null;
     private ?int $offsetVal  = null;
@@ -39,6 +42,7 @@ class QueryBuilder
     public function __construct(Connection $connection)
     {
         $this->connection = $connection;
+        $this->grammar    = $connection->getGrammar();
     }
 
     // ── Fluent API ──────────────────────────────────────────────────────────────
@@ -46,58 +50,136 @@ class QueryBuilder
     /**
      * Set the target table and return a fresh builder instance.
      * Each call to table() returns a clean builder to prevent state leakage.
+     *
+     * @throws \InvalidArgumentException If the table name is not a valid identifier.
      */
     public function table(string $table): static
     {
         $builder = new static($this->connection);
-        $builder->table = $table;
+        $builder->table = $this->grammar->wrapTable($table);
         return $builder;
     }
 
     /**
-     * Set columns for SELECT.
+     * Set columns for SELECT. Accepts "col", "table.col", "table.*" and "col AS alias".
+     *
+     * @throws \InvalidArgumentException If a column is not a valid identifier.
      */
     public function select(string ...$columns): static
     {
-        $this->columns = $columns ?: ['*'];
+        $this->columns = $columns
+            ? array_map(fn (string $c) => $this->grammar->wrap($c), $columns)
+            : ['*'];
+        return $this;
+    }
+
+    /**
+     * Add a raw SELECT expression. The expression is NOT escaped — never pass user input.
+     *
+     * @param array<int, mixed> $bindings
+     */
+    public function selectRaw(string $expression, array $bindings = []): static
+    {
+        if ($this->columns === ['*']) {
+            $this->columns = [];
+        }
+        $this->columns[]      = $expression;
+        $this->selectBindings = array_merge($this->selectBindings, array_values($bindings));
         return $this;
     }
 
     /**
      * Add a WHERE clause (AND).
+     *
+     * Comparing against null with "=" / "!=" / "<>" compiles to IS [NOT] NULL.
+     *
+     * @throws \InvalidArgumentException On an invalid column or operator.
      */
     public function where(string $column, string $operator, mixed $value): static
     {
-        $this->wheres[]   = ['AND', "`{$column}` {$operator} ?"];
-        $this->bindings[] = $value;
-        return $this;
+        return $this->addWhere('AND', $column, $operator, $value);
     }
 
     /**
      * Add an OR WHERE clause.
+     *
+     * @throws \InvalidArgumentException On an invalid column or operator.
      */
     public function orWhere(string $column, string $operator, mixed $value): static
     {
-        $this->wheres[]   = ['OR', "`{$column}` {$operator} ?"];
-        $this->bindings[] = $value;
+        return $this->addWhere('OR', $column, $operator, $value);
+    }
+
+    /**
+     * Add a parenthesised group of conditions:
+     *   ->where('active', '=', 1)->whereNested(fn ($q) => $q->where('a', '=', 1)->orWhere('b', '=', 2))
+     *   → WHERE `active` = ? AND (`a` = ? OR `b` = ?)
+     *
+     * @param \Closure(QueryBuilder): mixed $callback
+     */
+    public function whereNested(\Closure $callback, string $boolean = 'AND'): static
+    {
+        $nested = new static($this->connection);
+        $callback($nested);
+
+        if ($nested->wheres !== []) {
+            $this->wheres[]  = [$this->boolean($boolean), '(' . $nested->compileConditions() . ')'];
+            $this->bindings  = array_merge($this->bindings, $nested->bindings);
+        }
         return $this;
     }
 
     /**
-     * Add a WHERE IN clause.
+     * OR variant of whereNested().
+     *
+     * @param \Closure(QueryBuilder): mixed $callback
      */
-    /** @param array<int, mixed> $values */
+    public function orWhereNested(\Closure $callback): static
+    {
+        return $this->whereNested($callback, 'OR');
+    }
+
+    /**
+     * Add a raw WHERE clause. The SQL is NOT escaped — always use ? placeholders for values.
+     *
+     * @param array<int|string, mixed> $bindings
+     */
+    public function whereRaw(string $sql, array $bindings = [], string $boolean = 'AND'): static
+    {
+        $this->wheres[]  = [$this->boolean($boolean), '(' . $sql . ')'];
+        // array_merge keeps string keys (named placeholders) and renumbers positional ones.
+        $this->bindings  = array_merge($this->bindings, $bindings);
+        return $this;
+    }
+
+    /**
+     * OR variant of whereRaw().
+     *
+     * @param array<int, mixed> $bindings
+     */
+    public function orWhereRaw(string $sql, array $bindings = []): static
+    {
+        return $this->whereRaw($sql, $bindings, 'OR');
+    }
+
+    /**
+     * Add a WHERE IN clause.
+     *
+     * @param array<int, mixed> $values
+     */
     public function whereIn(string $column, array $values): static
     {
-        if (empty($values)) {
-            // Always false — no rows can match an empty IN set
-            $this->wheres[] = ['AND', '0 = 1'];
-            return $this;
-        }
-        $placeholders     = implode(', ', array_fill(0, count($values), '?'));
-        $this->wheres[]   = ['AND', "`{$column}` IN ({$placeholders})"];
-        $this->bindings   = array_merge($this->bindings, array_values($values));
-        return $this;
+        return $this->addWhereIn('AND', $column, $values, false);
+    }
+
+    /**
+     * Add a WHERE NOT IN clause.
+     *
+     * @param array<int, mixed> $values
+     */
+    public function whereNotIn(string $column, array $values): static
+    {
+        return $this->addWhereIn('AND', $column, $values, true);
     }
 
     /**
@@ -105,7 +187,7 @@ class QueryBuilder
      */
     public function whereNull(string $column): static
     {
-        $this->wheres[] = ['AND', "`{$column}` IS NULL"];
+        $this->wheres[] = ['AND', $this->grammar->wrap($column) . ' IS NULL'];
         return $this;
     }
 
@@ -114,22 +196,35 @@ class QueryBuilder
      */
     public function whereNotNull(string $column): static
     {
-        $this->wheres[] = ['AND', "`{$column}` IS NOT NULL"];
+        $this->wheres[] = ['AND', $this->grammar->wrap($column) . ' IS NOT NULL'];
         return $this;
     }
 
     /**
-     * Set ORDER BY clause.
+     * Set ORDER BY clause. Direction is normalised to ASC/DESC.
+     *
+     * @throws \InvalidArgumentException If the column is not a valid identifier.
      */
     public function orderBy(string $column, string $direction = 'ASC'): static
     {
-        $direction = strtoupper($direction) === 'DESC' ? 'DESC' : 'ASC';
-        if ($this->orderBy === null) {
-            $this->orderBy = "`{$column}` {$direction}";
-        } else {
-            $this->orderBy .= ", `{$column}` {$direction}";
-        }
-        return $this;
+        $direction = strtoupper(trim($direction)) === 'DESC' ? 'DESC' : 'ASC';
+        return $this->appendOrder($this->grammar->wrap($column) . " {$direction}");
+    }
+
+    /**
+     * ORDER BY ... DESC shortcut.
+     */
+    public function orderByDesc(string $column): static
+    {
+        return $this->orderBy($column, 'DESC');
+    }
+
+    /**
+     * Add a raw ORDER BY expression. NOT escaped — never pass user input.
+     */
+    public function orderByRaw(string $expression): static
+    {
+        return $this->appendOrder($expression);
     }
 
     /**
@@ -137,7 +232,7 @@ class QueryBuilder
      */
     public function limit(int $limit): static
     {
-        $this->limitVal = $limit;
+        $this->limitVal = max(0, $limit);
         return $this;
     }
 
@@ -146,7 +241,7 @@ class QueryBuilder
      */
     public function offset(int $offset): static
     {
-        $this->offsetVal = $offset;
+        $this->offsetVal = max(0, $offset);
         return $this;
     }
 
@@ -161,7 +256,7 @@ class QueryBuilder
     {
         $this->requireTable();
         $sql = $this->compileSelect();
-        return $this->query($sql, $this->bindings)->fetchAll();
+        return $this->query($sql, $this->selectQueryBindings())->fetchAll();
     }
 
     /**
@@ -173,7 +268,7 @@ class QueryBuilder
         $this->requireTable();
         $this->limitVal = 1;
         $sql = $this->compileSelect();
-        return $this->query($sql, $this->bindings)->fetchOne();
+        return $this->query($sql, $this->selectQueryBindings())->fetchOne();
     }
 
     /**
@@ -183,9 +278,17 @@ class QueryBuilder
     public function insert(array $data): bool
     {
         $this->requireTable();
-        $cols  = implode('`, `', array_keys($data));
+        if ($data === []) {
+            $sql = $this->grammar->getDriver() === 'mysql'
+                ? "INSERT INTO {$this->table} () VALUES ()"
+                : "INSERT INTO {$this->table} DEFAULT VALUES";
+            $this->connection->execute($sql);
+            return true;
+        }
+
+        $cols  = $this->grammar->columnize(array_map('strval', array_keys($data)));
         $marks = implode(', ', array_fill(0, count($data), '?'));
-        $sql   = "INSERT INTO `{$this->table}` (`{$cols}`) VALUES ({$marks})";
+        $sql   = "INSERT INTO {$this->table} ({$cols}) VALUES ({$marks})";
         $this->connection->execute($sql, array_values($data));
         return true;
     }
@@ -197,9 +300,15 @@ class QueryBuilder
     public function update(array $data): int
     {
         $this->requireTable();
-        $sets     = implode(', ', array_map(fn(string $col) => "`{$col}` = ?", array_keys($data)));
+        if ($data === []) {
+            return 0;
+        }
+        $sets     = implode(', ', array_map(
+            fn (int|string $col) => $this->grammar->wrap((string) $col) . ' = ?',
+            array_keys($data)
+        ));
         $values   = array_values($data);
-        $sql      = "UPDATE `{$this->table}` SET {$sets}";
+        $sql      = "UPDATE {$this->table} SET {$sets}";
         $sql     .= $this->compileWheres();
         $bindings = array_merge($values, $this->bindings);
         $stmt     = $this->connection->execute($sql, $bindings);
@@ -212,7 +321,7 @@ class QueryBuilder
     public function delete(): int
     {
         $this->requireTable();
-        $sql  = "DELETE FROM `{$this->table}`";
+        $sql  = "DELETE FROM {$this->table}";
         $sql .= $this->compileWheres();
         $stmt = $this->connection->execute($sql, $this->bindings);
         return $stmt->rowCount();
@@ -224,7 +333,7 @@ class QueryBuilder
     public function count(): int
     {
         $this->requireTable();
-        $sql  = "SELECT COUNT(*) FROM `{$this->table}`";
+        $sql  = "SELECT COUNT(*) FROM {$this->table}";
         $sql .= $this->compileWheres();
         $result = $this->query($sql, $this->bindings)->fetchColumn();
         return (int) ($result[0] ?? 0);
@@ -269,7 +378,7 @@ class QueryBuilder
         $page = max(1, $page);
 
         // ── 1. Count total matching rows ───────────────────────────────────
-        $countSql    = "SELECT COUNT(*) FROM `{$this->table}`";
+        $countSql    = "SELECT COUNT(*) FROM {$this->table}";
         $countSql   .= $this->compileWheres();
         $countResult = $this->query($countSql, $this->bindings)->fetchColumn();
         $total       = (int) ($countResult[0] ?? 0);
@@ -277,15 +386,10 @@ class QueryBuilder
         // ── 2. Fetch the page data ─────────────────────────────────────────
         $offset = ($page - 1) * $perPage;
 
-        // Clone the builder state to avoid mutating the current instance
-        $dataSql  = $this->compileSelect();
-
-        // Override/append LIMIT and OFFSET (safe integer interpolation)
-        // compileSelect() may already have limitVal/offsetVal from chaining,
-        // but for pagination we always override with our calculated values.
+        // Always override LIMIT/OFFSET with the calculated values (safe integer interpolation).
         $dataSql = $this->compileSelectForPagination($perPage, $offset);
 
-        $rows = $this->query($dataSql, $this->bindings)->fetchAll();
+        $rows = $this->query($dataSql, $this->selectQueryBindings())->fetchAll();
 
         return new PaginationResult(
             data:        $rows,
@@ -301,8 +405,8 @@ class QueryBuilder
      */
     private function compileSelectForPagination(int $limit, int $offset): string
     {
-        $cols = $this->columns === ['*'] ? '*' : '`' . implode('`, `', $this->columns) . '`';
-        $sql  = "SELECT {$cols} FROM `{$this->table}`";
+        $cols = implode(', ', $this->columns);
+        $sql  = "SELECT {$cols} FROM {$this->table}";
         $sql .= $this->compileWheres();
 
         if ($this->orderBy !== null) {
@@ -366,8 +470,8 @@ class QueryBuilder
 
     private function compileSelect(): string
     {
-        $cols = $this->columns === ['*'] ? '*' : '`' . implode('`, `', $this->columns) . '`';
-        $sql  = "SELECT {$cols} FROM `{$this->table}`";
+        $cols = implode(', ', $this->columns);
+        $sql  = "SELECT {$cols} FROM {$this->table}";
         $sql .= $this->compileWheres();
 
         if ($this->orderBy !== null) {
@@ -389,16 +493,71 @@ class QueryBuilder
             return '';
         }
 
+        return ' WHERE ' . $this->compileConditions();
+    }
+
+    private function compileConditions(): string
+    {
         $clauses = [];
         foreach ($this->wheres as $i => [$boolean, $clause]) {
-            if ($i === 0) {
-                $clauses[] = $clause;
-            } else {
-                $clauses[] = "{$boolean} {$clause}";
-            }
+            $clauses[] = $i === 0 ? $clause : "{$boolean} {$clause}";
         }
 
-        return ' WHERE ' . implode(' ', $clauses);
+        return implode(' ', $clauses);
+    }
+
+    private function addWhere(string $boolean, string $column, string $operator, mixed $value): static
+    {
+        $wrapped  = $this->grammar->wrap($column);
+        $operator = $this->grammar->operator($operator);
+
+        if ($value === null && in_array($operator, ['=', '!=', '<>'], true)) {
+            $this->wheres[] = [$boolean, $wrapped . ($operator === '=' ? ' IS NULL' : ' IS NOT NULL')];
+            return $this;
+        }
+
+        $this->wheres[]   = [$boolean, "{$wrapped} {$operator} ?"];
+        $this->bindings[] = $value;
+        return $this;
+    }
+
+    /** @param array<int, mixed> $values */
+    private function addWhereIn(string $boolean, string $column, array $values, bool $not): static
+    {
+        $wrapped = $this->grammar->wrap($column);
+
+        if (empty($values)) {
+            // IN () never matches; NOT IN () always matches.
+            $this->wheres[] = [$boolean, $not ? '1 = 1' : '0 = 1'];
+            return $this;
+        }
+
+        $placeholders   = implode(', ', array_fill(0, count($values), '?'));
+        $keyword        = $not ? 'NOT IN' : 'IN';
+        $this->wheres[] = [$boolean, "{$wrapped} {$keyword} ({$placeholders})"];
+        $this->bindings = array_merge($this->bindings, array_values($values));
+        return $this;
+    }
+
+    /** @return array<int|string, mixed> */
+    private function selectQueryBindings(): array
+    {
+        return array_merge($this->selectBindings, $this->bindings);
+    }
+
+    private function appendOrder(string $fragment): static
+    {
+        $this->orderBy = $this->orderBy === null ? $fragment : "{$this->orderBy}, {$fragment}";
+        return $this;
+    }
+
+    private function boolean(string $boolean): string
+    {
+        $boolean = strtoupper(trim($boolean));
+        if ($boolean !== 'AND' && $boolean !== 'OR') {
+            throw new \InvalidArgumentException("Invalid boolean \"{$boolean}\". Use AND or OR.");
+        }
+        return $boolean;
     }
 
     private function requireTable(): void

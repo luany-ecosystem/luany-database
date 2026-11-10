@@ -43,6 +43,66 @@ jobs:
       - name: Run tests
         run: ./vendor/bin/phpunit --no-coverage
 
+  drivers:
+    name: ${{ matrix.driver }} integration
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - driver: mysql
+            port: 3306
+          - driver: pgsql
+            port: 5432
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: luany
+          MYSQL_USER: luany
+          MYSQL_PASSWORD: secret
+          MYSQL_ROOT_PASSWORD: root
+        ports: ["3306:3306"]
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: luany
+          POSTGRES_USER: luany
+          POSTGRES_PASSWORD: secret
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd="pg_isready -U luany"
+          --health-interval=5s --health-timeout=5s --health-retries=20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: pdo, pdo_mysql, pdo_pgsql, mbstring
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --no-interaction --prefer-dist
+
+      - name: Run integration tests
+        env:
+          LUANY_DB_DRIVER: ${{ matrix.driver }}
+          LUANY_DB_HOST: 127.0.0.1
+          LUANY_DB_PORT: ${{ matrix.port }}
+          LUANY_DB_NAME: luany
+          LUANY_DB_USER: luany
+          LUANY_DB_PASS: secret
+        run: ./vendor/bin/phpunit --no-coverage --group integration
+
   analyse:
     name: PHPStan
     runs-on: ubuntu-latest

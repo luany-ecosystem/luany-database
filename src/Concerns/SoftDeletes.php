@@ -89,6 +89,7 @@ trait SoftDeletes
             ->update([$this->deletedAtColumn => $timestamp]);
 
         $this->setAttribute($this->deletedAtColumn, $timestamp);
+        $this->syncOriginal();
 
         return true;
     }
@@ -117,12 +118,16 @@ trait SoftDeletes
      */
     public function restore(): bool
     {
+        if (!$this->exists) {
+            return false;
+        }
+
         static::newQueryUnscoped()
             ->where($this->primaryKey, '=', $this->getAttribute($this->primaryKey))
             ->update([$this->deletedAtColumn => null]);
 
         $this->setAttribute($this->deletedAtColumn, null);
-        $this->exists = true;
+        $this->syncOriginal();
 
         return true;
     }
