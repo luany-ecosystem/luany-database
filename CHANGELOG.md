@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — 1.5.0
+## [1.5.0] — 2026-11-11
 
 ### Added
 - **Model events** — `creating`, `created`, `updating`, `updated`, `saving`, `saved`, `deleting`, `deleted`, `restoring`, `restored`; static registration (`Post::creating(...)`), `observe()`, `booted()` hook; `-ing` listeners returning `false` cancel the operation. (#14)
