@@ -124,8 +124,37 @@ class Connection
     public function execute(string $sql, array $bindings = []): \PDOStatement
     {
         $stmt = $this->pdo->prepare($sql);
-        $stmt->execute($bindings);
+
+        if (!$this->typedIntegers()) {
+            $stmt->execute($bindings);
+            return $stmt;
+        }
+
+        // Bind integers as integers: SQLite compares an INTEGER with a TEXT
+        // parameter as text (SUM(x) > '10' is always false).
+        $position = 0;
+        foreach ($bindings as $key => $value) {
+            $parameter = is_int($key) ? ++$position : (str_starts_with((string) $key, ':') ? (string) $key : ':' . $key);
+            $type = match (true) {
+                is_int($value)  => \PDO::PARAM_INT,
+                is_null($value) => \PDO::PARAM_NULL,
+                default         => \PDO::PARAM_STR,
+            };
+            $stmt->bindValue($parameter, is_bool($value) ? (int) $value : $value, is_bool($value) ? \PDO::PARAM_INT : $type);
+        }
+
+        $stmt->execute();
         return $stmt;
+    }
+
+    /**
+     * PostgreSQL infers parameter types from context (and rejects integers
+     * for BOOLEAN columns), so typed integer binding is limited to MySQL and
+     * SQLite.
+     */
+    private function typedIntegers(): bool
+    {
+        return in_array($this->getDriverName(), ['sqlite', 'mysql'], true);
     }
 
     /**

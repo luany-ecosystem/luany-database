@@ -36,6 +36,15 @@ class QueryBuilder
     /** @var array<int, mixed> Bindings for selectRaw() expressions (precede WHERE bindings) */
     private array $selectBindings = [];
     private ?string $orderBy = null;
+    /** @var array<int, string> Compiled JOIN clauses */
+    private array $joins = [];
+    /** @var array<int, string> Compiled GROUP BY columns */
+    private array $groups = [];
+    /** @var array<int, array{0: string, 1: string}> [boolean, compiled clause] */
+    private array $havings = [];
+    /** @var array<int, mixed> */
+    private array $havingBindings = [];
+    private bool $distinct = false;
     private ?int $limitVal   = null;
     private ?int $offsetVal  = null;
 
@@ -85,6 +94,82 @@ class QueryBuilder
         }
         $this->columns[]      = $expression;
         $this->selectBindings = array_merge($this->selectBindings, array_values($bindings));
+        return $this;
+    }
+
+    /**
+     * SELECT DISTINCT.
+     */
+    public function distinct(bool $distinct = true): static
+    {
+        $this->distinct = $distinct;
+        return $this;
+    }
+
+    /**
+     * INNER JOIN $table ON $first $operator $second (column to column).
+     *
+     *   ->join('posts AS p', 'p.user_id', '=', 'users.id')
+     *
+     * @throws \InvalidArgumentException On invalid identifiers / operator.
+     */
+    public function join(string $table, string $first, string $operator, string $second, string $type = 'INNER'): static
+    {
+        $type = strtoupper(trim($type));
+        if (!in_array($type, ['INNER', 'LEFT', 'RIGHT', 'CROSS'], true)) {
+            throw new \InvalidArgumentException("Invalid join type \"{$type}\". Use INNER, LEFT, RIGHT or CROSS.");
+        }
+
+        $this->joins[] = sprintf(
+            '%s JOIN %s ON %s %s %s',
+            $type,
+            $this->grammar->wrapTable($table),
+            $this->grammar->wrap($first),
+            $this->grammar->operator($operator),
+            $this->grammar->wrap($second)
+        );
+        return $this;
+    }
+
+    /**
+     * LEFT JOIN $table ON $first $operator $second.
+     */
+    public function leftJoin(string $table, string $first, string $operator, string $second): static
+    {
+        return $this->join($table, $first, $operator, $second, 'LEFT');
+    }
+
+    /**
+     * GROUP BY one or more columns.
+     */
+    public function groupBy(string ...$columns): static
+    {
+        foreach ($columns as $column) {
+            $this->groups[] = $this->grammar->wrap($column);
+        }
+        return $this;
+    }
+
+    /**
+     * HAVING $column $operator ? — $column is a column or a selectRaw() alias
+     * (aliases in HAVING work on MySQL and SQLite; on PostgreSQL use havingRaw()).
+     */
+    public function having(string $column, string $operator, mixed $value, string $boolean = 'AND'): static
+    {
+        $this->havings[]        = [$this->boolean($boolean), $this->grammar->wrap($column) . ' ' . $this->grammar->operator($operator) . ' ?'];
+        $this->havingBindings[] = $value;
+        return $this;
+    }
+
+    /**
+     * Raw HAVING expression, e.g. havingRaw('COUNT(*) > ?', [5]). NOT escaped.
+     *
+     * @param array<int, mixed> $bindings
+     */
+    public function havingRaw(string $sql, array $bindings = [], string $boolean = 'AND'): static
+    {
+        $this->havings[]      = [$this->boolean($boolean), '(' . $sql . ')'];
+        $this->havingBindings = array_merge($this->havingBindings, array_values($bindings));
         return $this;
     }
 
@@ -303,6 +388,7 @@ class QueryBuilder
         if ($data === []) {
             return 0;
         }
+        $this->assertNoJoins('update');
         $sets     = implode(', ', array_map(
             fn (int|string $col) => $this->grammar->wrap((string) $col) . ' = ?',
             array_keys($data)
@@ -321,6 +407,7 @@ class QueryBuilder
     public function delete(): int
     {
         $this->requireTable();
+        $this->assertNoJoins('delete');
         $sql  = "DELETE FROM {$this->table}";
         $sql .= $this->compileWheres();
         $stmt = $this->connection->execute($sql, $this->bindings);
@@ -333,10 +420,40 @@ class QueryBuilder
     public function count(): int
     {
         $this->requireTable();
-        $sql  = "SELECT COUNT(*) FROM {$this->table}";
-        $sql .= $this->compileWheres();
-        $result = $this->query($sql, $this->bindings)->fetchColumn();
-        return (int) ($result[0] ?? 0);
+        return $this->countRows();
+    }
+
+    /**
+     * SUM(column) over the matching rows (null when there are none).
+     */
+    public function sum(string $column): int|float|null
+    {
+        return $this->numericAggregate('SUM', $column);
+    }
+
+    /**
+     * AVG(column) over the matching rows (null when there are none).
+     */
+    public function avg(string $column): ?float
+    {
+        $value = $this->numericAggregate('AVG', $column);
+        return $value === null ? null : (float) $value;
+    }
+
+    /**
+     * MIN(column) over the matching rows.
+     */
+    public function min(string $column): mixed
+    {
+        return $this->aggregate('MIN', $column);
+    }
+
+    /**
+     * MAX(column) over the matching rows.
+     */
+    public function max(string $column): mixed
+    {
+        return $this->aggregate('MAX', $column);
     }
 
     /**
@@ -378,10 +495,7 @@ class QueryBuilder
         $page = max(1, $page);
 
         // ── 1. Count total matching rows ───────────────────────────────────
-        $countSql    = "SELECT COUNT(*) FROM {$this->table}";
-        $countSql   .= $this->compileWheres();
-        $countResult = $this->query($countSql, $this->bindings)->fetchColumn();
-        $total       = (int) ($countResult[0] ?? 0);
+        $total = $this->countRows();
 
         // ── 2. Fetch the page data ─────────────────────────────────────────
         $offset = ($page - 1) * $perPage;
@@ -405,17 +519,7 @@ class QueryBuilder
      */
     private function compileSelectForPagination(int $limit, int $offset): string
     {
-        $cols = implode(', ', $this->columns);
-        $sql  = "SELECT {$cols} FROM {$this->table}";
-        $sql .= $this->compileWheres();
-
-        if ($this->orderBy !== null) {
-            $sql .= " ORDER BY {$this->orderBy}";
-        }
-
-        $sql .= " LIMIT {$limit} OFFSET {$offset}";
-
-        return $sql;
+        return $this->compileSelect($limit, $offset);
     }
 
     // ── Raw methods (backward-compatible) ───────────────────────────────────────
@@ -468,23 +572,116 @@ class QueryBuilder
 
     // ── SQL compilation ─────────────────────────────────────────────────────────
 
-    private function compileSelect(): string
+    /**
+     * @param int|null $limit  Overrides limit() when given
+     * @param int|null $offset Overrides offset() when given
+     */
+    private function compileSelect(?int $limit = null, ?int $offset = null, bool $withOrder = true): string
     {
         $cols = implode(', ', $this->columns);
-        $sql  = "SELECT {$cols} FROM {$this->table}";
+        $sql  = 'SELECT ' . ($this->distinct ? 'DISTINCT ' : '') . $cols;
+        $sql .= $this->compileFrom();
         $sql .= $this->compileWheres();
+        $sql .= $this->compileGroups();
 
-        if ($this->orderBy !== null) {
+        if ($withOrder && $this->orderBy !== null) {
             $sql .= " ORDER BY {$this->orderBy}";
         }
-        if ($this->limitVal !== null) {
-            $sql .= " LIMIT {$this->limitVal}";
+
+        $limit  ??= $this->limitVal;
+        $offset ??= $this->offsetVal;
+
+        if ($limit !== null) {
+            $sql .= " LIMIT {$limit}";
         }
-        if ($this->offsetVal !== null) {
-            $sql .= " OFFSET {$this->offsetVal}";
+        if ($offset !== null) {
+            $sql .= " OFFSET {$offset}";
         }
 
         return $sql;
+    }
+
+    private function compileFrom(): string
+    {
+        return " FROM {$this->table}" . ($this->joins === [] ? '' : ' ' . implode(' ', $this->joins));
+    }
+
+    private function compileGroups(): string
+    {
+        $sql = '';
+
+        if ($this->groups !== []) {
+            $sql .= ' GROUP BY ' . implode(', ', $this->groups);
+        }
+
+        if ($this->havings !== []) {
+            $clauses = [];
+            foreach ($this->havings as $i => [$boolean, $clause]) {
+                $clauses[] = $i === 0 ? $clause : "{$boolean} {$clause}";
+            }
+            $sql .= ' HAVING ' . implode(' ', $clauses);
+        }
+
+        return $sql;
+    }
+
+    /**
+     * Number of result rows, honouring joins, DISTINCT and GROUP BY.
+     */
+    private function countRows(): int
+    {
+        if ($this->groups !== [] || $this->distinct) {
+            $inner = $this->compileSelect(null, null, false);
+            $sql   = "SELECT COUNT(*) FROM ({$inner}) AS luany_count";
+            $value = $this->query($sql, $this->allBindings())->fetchColumn();
+        } else {
+            $sql   = 'SELECT COUNT(*)' . $this->compileFrom() . $this->compileWheres();
+            $value = $this->query($sql, $this->bindings)->fetchColumn();
+        }
+
+        return (int) ($value[0] ?? 0);
+    }
+
+    private function aggregate(string $function, string $column): mixed
+    {
+        $this->requireTable();
+
+        if ($this->groups !== []) {
+            throw new \LogicException(
+                "{$function}() cannot be combined with groupBy(); use selectRaw('{$function}(...) AS x')->groupBy(...)->get()."
+            );
+        }
+
+        $sql = "SELECT {$function}(" . $this->grammar->wrap($column) . ') AS aggregate'
+            . $this->compileFrom() . $this->compileWheres();
+
+        $value = $this->query($sql, $this->bindings)->fetchColumn();
+
+        return $value[0] ?? null;
+    }
+
+    private function numericAggregate(string $function, string $column): int|float|null
+    {
+        $value = $this->aggregate($function, $column);
+
+        if ($value === null) {
+            return null;
+        }
+
+        return is_numeric($value) && (string) (int) $value === (string) $value ? (int) $value : (float) $value;
+    }
+
+    /** @return array<int|string, mixed> */
+    private function allBindings(): array
+    {
+        return array_merge($this->selectBindings, $this->bindings, $this->havingBindings);
+    }
+
+    private function assertNoJoins(string $operation): void
+    {
+        if ($this->joins !== []) {
+            throw new \LogicException("{$operation}() with joins is not supported; filter with whereIn() on the target table instead.");
+        }
     }
 
     private function compileWheres(): string
@@ -542,7 +739,7 @@ class QueryBuilder
     /** @return array<int|string, mixed> */
     private function selectQueryBindings(): array
     {
-        return array_merge($this->selectBindings, $this->bindings);
+        return $this->allBindings();
     }
 
     private function appendOrder(string $fragment): static

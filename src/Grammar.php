@@ -73,11 +73,17 @@ final class Grammar
     }
 
     /**
-     * Wrap a table name (optionally "schema.table").
+     * Wrap a table name (optionally "schema.table" and/or "table AS alias").
      */
     public function wrapTable(string $table): string
     {
         $table = trim($table);
+
+        // "posts AS p" → `posts` AS `p`
+        if (preg_match('/^(.+?)\s+as\s+(.+)$/i', $table, $m) === 1) {
+            return $this->wrapTable($m[1]) . ' AS ' . $this->wrapSegment($m[2], $table);
+        }
+
         $parts = explode('.', $table);
 
         if (count($parts) > 2) {

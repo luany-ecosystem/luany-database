@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.4.0
+
+### Added
+- **Joins** — `join()`, `leftJoin()` (column-to-column, identifiers validated), table aliases (`'posts AS p'`). (#14)
+- **Grouping** — `groupBy()`, `having()`, `havingRaw()`, `distinct()`; `count()` and `paginate()` honour joins, DISTINCT and GROUP BY. (#14)
+- **Aggregates** — `sum()`, `avg()`, `min()`, `max()` on QueryBuilder and model queries. (#14)
+- **`belongsToMany`** — many-to-many through a pivot table with conventional defaults, `withPivot()`, `->pivot`, `attach()`, `detach()`, `sync()` (transactional), lazy and eager loading. (#14)
+- **Nested eager loading** — `with('posts.comments.author')`, one query per level. (#14)
+
+### Fixed
+- Integer bindings are sent as integers on MySQL and SQLite; on SQLite, comparing an aggregate with a text parameter (`SUM(x) > '10'`) was always false.
+
+### Changed
+- `update()` / `delete()` throw on joined queries instead of producing invalid SQL.
+
+---
+
 ## [1.3.0] — 2026-11-11
 
 ### Added
