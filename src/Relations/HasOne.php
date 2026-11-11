@@ -51,7 +51,7 @@ class HasOne extends Relation
         }
 
 
-        $row = ($this->relatedClass)::query()->toBase()
+        $row = $this->newRelatedQuery($this->relatedClass)
             ->where($this->foreignKey, '=', $this->localValue)
             ->first();
 
@@ -78,7 +78,7 @@ class HasOne extends Relation
         $keyed = [];
 
         if (!empty($localValues)) {
-            $rows = ($this->relatedClass)::query()->toBase()
+            $rows = $this->newRelatedQuery($this->relatedClass)
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 
@@ -104,5 +104,12 @@ class HasOne extends Relation
     public function getConnection(): Connection
     {
         return $this->connection;
+    }
+
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): \Luany\Database\QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query->whereColumn("{$alias}.{$this->foreignKey}", '=', "{$parentTable}.{$this->localKey}");
     }
 }

@@ -42,7 +42,7 @@ class MorphTo extends Relation
 
         $class = Model::resolveMorphClass((string) $type);
         $key   = $this->ownerKey ?? (new $class())->getPrimaryKey();
-        $row   = $class::query()->toBase()->where($key, '=', $id)->first();
+        $row   = $this->newRelatedQuery($class)->where($key, '=', $id)->first();
 
         return $row === null ? null : $class::hydrateFromRow($row);
     }
@@ -68,7 +68,7 @@ class MorphTo extends Relation
             $class = Model::resolveMorphClass($type);
             $key   = $this->ownerKey ?? (new $class())->getPrimaryKey();
 
-            foreach ($class::query()->toBase()->whereIn($key, array_values(array_unique($ids)))->get() as $row) {
+            foreach ($this->newRelatedQuery($class)->whereIn($key, array_values(array_unique($ids)))->get() as $row) {
                 $owners[$type][(string) $row[$key]] = $class::hydrateFromRow($row);
             }
         }

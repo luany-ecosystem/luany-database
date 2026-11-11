@@ -53,7 +53,7 @@ class HasMany extends Relation
         }
 
 
-        $rows = ($this->relatedClass)::query()->toBase()
+        $rows = $this->newRelatedQuery($this->relatedClass)
             ->where($this->foreignKey, '=', $this->localValue)
             ->get();
 
@@ -83,7 +83,7 @@ class HasMany extends Relation
         $grouped = [];
 
         if (!empty($localValues)) {
-            $rows = ($this->relatedClass)::query()->toBase()
+            $rows = $this->newRelatedQuery($this->relatedClass)
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 
@@ -106,5 +106,12 @@ class HasMany extends Relation
     public function getConnection(): Connection
     {
         return $this->connection;
+    }
+
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): \Luany\Database\QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query->whereColumn("{$alias}.{$this->foreignKey}", '=', "{$parentTable}.{$this->localKey}");
     }
 }

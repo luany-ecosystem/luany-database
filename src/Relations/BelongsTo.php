@@ -52,7 +52,7 @@ class BelongsTo extends Relation
         }
 
 
-        $row = ($this->relatedClass)::query()->toBase()
+        $row = $this->newRelatedQuery($this->relatedClass)
             ->where($this->ownerKey, '=', $this->foreignValue)
             ->first();
 
@@ -79,7 +79,7 @@ class BelongsTo extends Relation
         $keyed = [];
 
         if (!empty($foreignValues)) {
-            $rows = ($this->relatedClass)::query()->toBase()
+            $rows = $this->newRelatedQuery($this->relatedClass)
                 ->whereIn($this->ownerKey, $foreignValues)
                 ->get();
 
@@ -102,5 +102,12 @@ class BelongsTo extends Relation
     public function getConnection(): Connection
     {
         return $this->connection;
+    }
+
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): \Luany\Database\QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query->whereColumn("{$alias}.{$this->ownerKey}", '=', "{$parentTable}.{$this->foreignKey}");
     }
 }

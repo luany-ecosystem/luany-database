@@ -27,6 +27,8 @@ class QueryBuilder
     private Grammar $grammar;
 
     private ?string $table   = null;
+    /** Unquoted table name as given to table() (without alias). */
+    private ?string $tableName = null;
     /** @var array<int, string> Compiled SELECT fragments (already quoted) */
     private array $columns   = ['*'];
     /** @var array<int, array{0: string, 1: string}> [boolean, compiled clause] */
@@ -66,7 +68,64 @@ class QueryBuilder
     {
         $builder = new static($this->connection);
         $builder->table = $this->grammar->wrapTable($table);
+        $builder->tableName = preg_replace('/\s+as\s+.+$/i', '', trim($table));
         return $builder;
+    }
+
+    /**
+     * Alias the current table: FROM `users` AS `u`. Unqualified columns keep
+     * working; qualify with the alias where needed (used for correlated
+     * subqueries, e.g. self-referencing whereHas()).
+     */
+    public function alias(string $alias): static
+    {
+        $this->requireTable();
+        $this->table = $this->grammar->wrapTable("{$this->tableName} AS {$alias}");
+        return $this;
+    }
+
+    /**
+     * Compare two columns: ->whereColumn('posts.user_id', '=', 'users.id').
+     */
+    public function whereColumn(string $first, string $operator, string $second, string $boolean = 'AND'): static
+    {
+        $this->wheres[] = [
+            $this->boolean($boolean),
+            $this->grammar->wrap($first) . ' ' . $this->grammar->operator($operator) . ' ' . $this->grammar->wrap($second),
+        ];
+        return $this;
+    }
+
+    /**
+     * The SELECT this builder would run (with ? placeholders).
+     */
+    public function toSql(): string
+    {
+        $this->requireTable();
+        return $this->compileSelect();
+    }
+
+    /**
+     * Bindings for toSql(), in placeholder order.
+     *
+     * @return array<int|string, mixed>
+     */
+    public function getBindings(): array
+    {
+        return $this->allBindings();
+    }
+
+    /**
+     * Whether select()/selectRaw() were never called (SELECT *).
+     */
+    public function hasDefaultColumns(): bool
+    {
+        return $this->columns === ['*'];
+    }
+
+    public function getTableName(): ?string
+    {
+        return $this->tableName;
     }
 
     /**
@@ -371,11 +430,195 @@ class QueryBuilder
             return true;
         }
 
+        if (array_is_list($data) && is_array($data[0] ?? null)) {
+            return $this->insertMany($data);
+        }
+
         $cols  = $this->grammar->columnize(array_map('strval', array_keys($data)));
         $marks = implode(', ', array_fill(0, count($data), '?'));
         $sql   = "INSERT INTO {$this->table} ({$cols}) VALUES ({$marks})";
         $this->connection->execute($sql, array_values($data));
         return true;
+    }
+
+    /**
+     * Insert or update rows in one statement.
+     *
+     *   ->upsert(
+     *       [['sku' => 'A1', 'price' => 10], ['sku' => 'B2', 'price' => 20]],
+     *       uniqueBy: ['sku'],            // columns of a PRIMARY KEY / UNIQUE index
+     *       update:   ['price'],          // columns to overwrite on conflict (default: all but uniqueBy)
+     *   );
+     *
+     * MySQL: ON DUPLICATE KEY UPDATE; PostgreSQL / SQLite: ON CONFLICT … DO UPDATE.
+     * Returns the driver's affected-row count.
+     *
+     * @param array<int, array<string, mixed>>|array<string, mixed> $rows
+     * @param array<int, string>                                    $uniqueBy
+     * @param array<int, string>|null                               $update
+     */
+    public function upsert(array $rows, array $uniqueBy, ?array $update = null): int
+    {
+        $this->requireTable();
+
+        if ($rows === []) {
+            return 0;
+        }
+        if (!array_is_list($rows)) {
+            $rows = [$rows];
+        }
+        if ($uniqueBy === []) {
+            throw new \InvalidArgumentException('upsert() needs the unique column(s) in $uniqueBy.');
+        }
+
+        [$columns, $sql, $bindings] = $this->compileInsertRows($rows);
+        $update ??= array_values(array_diff($columns, $uniqueBy));
+
+        if ($update === []) {
+            $sql .= $this->grammar->getDriver() === 'mysql'
+                ? ' ON DUPLICATE KEY UPDATE ' . $this->grammar->wrap($uniqueBy[0]) . ' = ' . $this->grammar->wrap($uniqueBy[0])
+                : ' ON CONFLICT (' . $this->grammar->columnize($uniqueBy) . ') DO NOTHING';
+        } elseif ($this->grammar->getDriver() === 'mysql') {
+            $sql .= ' ON DUPLICATE KEY UPDATE ' . implode(', ', array_map(
+                fn (string $c) => $this->grammar->wrap($c) . ' = VALUES(' . $this->grammar->wrap($c) . ')',
+                $update
+            ));
+        } else {
+            $sql .= ' ON CONFLICT (' . $this->grammar->columnize($uniqueBy) . ') DO UPDATE SET ' . implode(', ', array_map(
+                fn (string $c) => $this->grammar->wrap($c) . ' = excluded.' . $this->grammar->wrap($c),
+                $update
+            ));
+        }
+
+        return $this->connection->execute($sql, $bindings)->rowCount();
+    }
+
+    /**
+     * Process matching rows in chunks of $size (LIMIT/OFFSET pages, in the
+     * builder's order). Return false from the callback to stop.
+     * Prefer chunkById() when the callback modifies the rows it reads.
+     *
+     * @param callable(array<int, array<string, mixed>>, int): (bool|null|void) $callback
+     */
+    public function chunk(int $size, callable $callback): bool
+    {
+        $this->requireTable();
+        $this->assertPositive($size);
+
+        for ($page = 1; ; $page++) {
+            $rows = $this->query($this->compileSelect($size, ($page - 1) * $size), $this->selectQueryBindings())->fetchAll();
+
+            if ($rows === []) {
+                return true;
+            }
+            if ($callback($rows, $page) === false) {
+                return false;
+            }
+            if (count($rows) < $size) {
+                return true;
+            }
+        }
+    }
+
+    /**
+     * Chunk by an increasing key (WHERE id > last ORDER BY id LIMIT n):
+     * stable even when the callback updates or deletes rows.
+     *
+     * @param callable(array<int, array<string, mixed>>, int): (bool|null|void) $callback
+     */
+    public function chunkById(int $size, callable $callback, string $column = 'id'): bool
+    {
+        $this->requireTable();
+        $this->assertPositive($size);
+
+        $last = null;
+        for ($page = 1; ; $page++) {
+            $query = clone $this;
+            $query->orderBy = null;
+            if ($last !== null) {
+                $query->where($column, '>', $last);
+            }
+            $query->orderBy($column);
+
+            $rows = $query->query($query->compileSelect($size, 0), $query->selectQueryBindings())->fetchAll();
+
+            if ($rows === []) {
+                return true;
+            }
+            if ($callback($rows, $page) === false) {
+                return false;
+            }
+
+            $key  = str_contains($column, '.') ? substr($column, strrpos($column, '.') + 1) : $column;
+            $last = $rows[count($rows) - 1][$key] ?? null;
+
+            if ($last === null || count($rows) < $size) {
+                return true;
+            }
+        }
+    }
+
+    /**
+     * Iterate matching rows one at a time without building the whole array.
+     *
+     * @return \Generator<int, array<string, mixed>>
+     */
+    public function cursor(): \Generator
+    {
+        $this->requireTable();
+        $stmt = $this->connection->execute($this->compileSelect(), $this->selectQueryBindings());
+
+        while (($row = $stmt->fetch(\PDO::FETCH_ASSOC)) !== false) {
+            yield $row;
+        }
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     */
+    private function insertMany(array $rows): bool
+    {
+        [, $sql, $bindings] = $this->compileInsertRows($rows);
+        $this->connection->execute($sql, $bindings);
+        return true;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $rows
+     * @return array{0: array<int, string>, 1: string, 2: array<int, mixed>}
+     */
+    private function compileInsertRows(array $rows): array
+    {
+        $columns = array_map('strval', array_keys($rows[0]));
+        sort($columns);
+
+        $bindings = [];
+        foreach ($rows as $i => $row) {
+            if (!is_array($row)) {
+                throw new \InvalidArgumentException('Batch insert expects a list of rows (arrays).');
+            }
+            $keys = array_map('strval', array_keys($row));
+            sort($keys);
+            if ($keys !== $columns) {
+                throw new \InvalidArgumentException("Row {$i} has different columns than the first row; batch rows must share the same columns.");
+            }
+            foreach ($columns as $column) {
+                $bindings[] = $row[$column];
+            }
+        }
+
+        $marks = '(' . implode(', ', array_fill(0, count($columns), '?')) . ')';
+        $sql   = "INSERT INTO {$this->table} (" . $this->grammar->columnize($columns) . ') VALUES '
+            . implode(', ', array_fill(0, count($rows), $marks));
+
+        return [$columns, $sql, $bindings];
+    }
+
+    private function assertPositive(int $size): void
+    {
+        if ($size < 1) {
+            throw new \InvalidArgumentException('Chunk size must be at least 1.');
+        }
     }
 
     /**
