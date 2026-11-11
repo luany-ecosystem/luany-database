@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — 1.3.0
+## [1.3.0] — 2026-11-11
 
 ### Added
 - **`ModelQuery`** — fluent model queries returning hydrated models: every QueryBuilder method plus `with()`, `get()`, `all()`, `first()`, `firstOrFail()`, `find()`, `findOrFail()`, `paginate()` (models in `data`), `pluck()`, `toBase()`. Global scopes (SoftDeletes) apply. (#14)
