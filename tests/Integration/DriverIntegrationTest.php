@@ -315,4 +315,71 @@ class DriverIntegrationTest extends TestCase
             }
         }
     }
+
+    public function test_schema_builder_on_real_driver(): void
+    {
+        $schema = \Luany\Database\Schema\Schema::for($this->conn);
+        $schema->dropIfExists('lu_sb_posts');
+        $schema->dropIfExists('lu_sb_users');
+
+        try {
+            $schema->create('lu_sb_users', function (\Luany\Database\Schema\Blueprint $t) {
+                $t->id();
+                $t->string('email')->unique();
+                $t->timestamps();
+            });
+            $schema->create('lu_sb_posts', function (\Luany\Database\Schema\Blueprint $t) {
+                $t->id();
+                $t->foreignId('user_id')->constrained('lu_sb_users')->cascadeOnDelete();
+                $t->string('title');
+                $t->decimal('price', 8, 2)->default(0);
+                $t->boolean('published')->default(false);
+                $t->enum('status', ['draft', 'live'])->default('draft');
+                $t->json('meta')->nullable();
+                $t->uuid('ref')->nullable();
+                $t->dateTime('due_at')->nullable();
+                $t->timestamp('seen_at')->nullable()->useCurrent();
+                $t->morphs('owner');
+                $t->timestamps();
+                $t->softDeletes();
+            });
+
+            $this->assertTrue($schema->hasTable('lu_sb_posts'));
+            $this->assertTrue($schema->hasColumn('lu_sb_posts', 'owner_id'));
+
+            $pdo = $this->conn->getPdo();
+            $pdo->exec("INSERT INTO lu_sb_users (email) VALUES ('a@x.ao')");
+            $userId = (int) $pdo->query("SELECT id FROM lu_sb_users WHERE email = 'a@x.ao'")->fetchColumn();
+            $pdo->exec("INSERT INTO lu_sb_posts (user_id, title, owner_type, owner_id) VALUES ({$userId}, 't', 'x', 1)");
+
+            $row = $pdo->query('SELECT price, published, status FROM lu_sb_posts')->fetch(\PDO::FETCH_ASSOC);
+            $this->assertSame(0.0, (float) $row['price']);
+            $this->assertFalse((bool) $row['published']);
+            $this->assertSame('draft', $row['status']);
+
+            $pdo->exec('DELETE FROM lu_sb_users');
+            $this->assertSame(0, (int) $pdo->query('SELECT COUNT(*) FROM lu_sb_posts')->fetchColumn(), 'ON DELETE CASCADE');
+
+            $schema->table('lu_sb_posts', function (\Luany\Database\Schema\Blueprint $t) {
+                $t->string('subtitle')->nullable();
+                $t->renameColumn('title', 'headline');
+                $t->dropColumn('meta');
+                $t->index('subtitle');
+            });
+            $columns = $schema->getColumnListing('lu_sb_posts');
+            $this->assertContains('headline', $columns);
+            $this->assertContains('subtitle', $columns);
+            $this->assertNotContains('meta', $columns);
+
+            $schema->table('lu_sb_posts', function (\Luany\Database\Schema\Blueprint $t) {
+                $t->dropIndex('subtitle');
+                $t->dropForeign('user_id');
+            });
+        } finally {
+            $schema->dropIfExists('lu_sb_posts');
+            $schema->dropIfExists('lu_sb_users');
+        }
+
+        $this->assertFalse($schema->hasTable('lu_sb_posts'));
+    }
 }

@@ -34,4 +34,13 @@ abstract class Migration
      * Reverse the migration — undo schema changes.
      */
     abstract public function down(\PDO $pdo): void;
+
+    /**
+     * Schema builder for this migration's connection:
+     *   $this->schema($pdo)->create('posts', fn (Blueprint $t) => …);
+     */
+    protected function schema(\PDO $pdo): \Luany\Database\Schema\Schema
+    {
+        return \Luany\Database\Schema\Schema::for($pdo);
+    }
 }
