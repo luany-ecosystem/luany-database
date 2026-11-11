@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — 1.6.0
+## [1.6.0] — 2026-11-11
 
 ### Added
 - **Relationship queries** — `whereHas()`, `orWhereHas()`, `whereDoesntHave()`, `has()` (with count operators), `doesntHave()`, dot notation for nested relations; correlated subqueries with table aliases, so self-referencing relations work; global scopes apply inside. (#21)
