@@ -39,6 +39,23 @@ class IntegrationArticle extends Model
     }
 }
 
+class IntegrationAuthor extends Model
+{
+    protected string $table = 'lu_authors';
+    protected array $fillable = ['name'];
+
+    public function books(): \Luany\Database\Relations\HasMany
+    {
+        return $this->hasMany(IntegrationBook::class, 'author_id');
+    }
+}
+
+class IntegrationBook extends Model
+{
+    protected string $table = 'lu_books';
+    protected array $fillable = ['author_id', 'title', 'stars'];
+}
+
 class IntegrationWidget extends Model
 {
     protected string $table = 'lu_widgets';
@@ -252,6 +269,48 @@ class DriverIntegrationTest extends TestCase
             $this->assertSame(20.0, IntegrationArticle::query()->avg('views'));
         } finally {
             foreach (['lu_article_tag', 'lu_articles', 'lu_tags'] as $t) {
+                $pdo->exec("DROP TABLE IF EXISTS {$t}");
+            }
+        }
+    }
+
+    public function test_upsert_where_has_with_count_and_constrained_eager_on_real_driver(): void
+    {
+        $pdo = $this->conn->getPdo();
+        $id  = $this->driver === 'pgsql' ? 'SERIAL PRIMARY KEY' : 'INT AUTO_INCREMENT PRIMARY KEY';
+        foreach (['lu_books', 'lu_authors', 'lu_stock'] as $t) {
+            $pdo->exec("DROP TABLE IF EXISTS {$t}");
+        }
+        $pdo->exec("CREATE TABLE lu_authors (id {$id}, name VARCHAR(50))");
+        $pdo->exec("CREATE TABLE lu_books (id {$id}, author_id INT, title VARCHAR(50), stars INT)");
+        $pdo->exec('CREATE TABLE lu_stock (sku VARCHAR(10) PRIMARY KEY, qty INT, price INT)');
+
+        try {
+            $qb = fn () => (new \Luany\Database\QueryBuilder($this->conn))->table('lu_stock');
+            $qb()->insert([['sku' => 'A', 'qty' => 1, 'price' => 10], ['sku' => 'B', 'qty' => 2, 'price' => 20]]);
+            $qb()->upsert([['sku' => 'A', 'qty' => 9, 'price' => 11], ['sku' => 'C', 'qty' => 3, 'price' => 30]], ['sku'], ['price']);
+
+            $stock = array_map(fn ($r) => [$r['sku'], (int) $r['qty'], (int) $r['price']], $qb()->orderBy('sku')->get());
+            $this->assertSame([['A', 1, 11], ['B', 2, 20], ['C', 3, 30]], $stock);
+
+            $ana = IntegrationAuthor::create(['name' => 'Ana']);
+            IntegrationAuthor::create(['name' => 'Rui']);
+            IntegrationBook::create(['author_id' => $ana->getKey(), 'title' => 'x', 'stars' => 5]);
+            IntegrationBook::create(['author_id' => $ana->getKey(), 'title' => 'y', 'stars' => 2]);
+
+            $this->assertSame(['Ana'], array_map(
+                fn ($a) => $a->name,
+                IntegrationAuthor::query()->whereHas('books', fn ($q) => $q->where('stars', '>=', 4))->get()
+            ));
+            $this->assertSame(['Rui'], array_map(fn ($a) => $a->name, IntegrationAuthor::query()->doesntHave('books')->get()));
+
+            $counted = IntegrationAuthor::query()->withCount('books')->orderBy('id')->get();
+            $this->assertSame([2, 0], array_map(fn ($a) => (int) $a->books_count, $counted));
+
+            $eager = IntegrationAuthor::with(['books' => fn ($q) => $q->where('stars', '>=', 4)])->orderBy('id')->get();
+            $this->assertSame(['x'], array_map(fn ($b) => $b->title, $eager[0]->books));
+        } finally {
+            foreach (['lu_books', 'lu_authors', 'lu_stock'] as $t) {
                 $pdo->exec("DROP TABLE IF EXISTS {$t}");
             }
         }

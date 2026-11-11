@@ -62,7 +62,16 @@ abstract class MorphOneOrMany extends Relation
 
     protected function query(): QueryBuilder
     {
-        return ($this->relatedClass)::query()->toBase()->where($this->typeColumn, '=', $this->morphType);
+        return $this->newRelatedQuery($this->relatedClass)->where($this->typeColumn, '=', $this->morphType);
+    }
+
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query
+            ->where("{$alias}.{$this->typeColumn}", '=', $this->morphType)
+            ->whereColumn("{$alias}.{$this->idColumn}", '=', "{$parentTable}.{$this->localKey}");
     }
 
     /**

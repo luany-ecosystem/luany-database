@@ -75,6 +75,15 @@ class HasManyThrough extends Relation
         }
     }
 
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query
+            ->join($this->throughTable, "{$this->throughTable}.{$this->secondLocalKey}", '=', "{$alias}.{$this->secondKey}")
+            ->whereColumn("{$this->throughTable}.{$this->firstKey}", '=', "{$parentTable}.{$this->localKey}");
+    }
+
     public function getConnection(): Connection
     {
         return $this->connection;
@@ -86,7 +95,7 @@ class HasManyThrough extends Relation
         $related      = new $this->relatedClass();
         $relatedTable = $related->getTable();
 
-        return ($this->relatedClass)::query()->toBase()
+        return $this->newRelatedQuery($this->relatedClass)
             ->select("{$relatedTable}.*", "{$this->throughTable}.{$this->firstKey} AS " . self::THROUGH_KEY)
             ->join(
                 $this->throughTable,

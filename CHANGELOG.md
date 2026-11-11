@@ -6,6 +6,20 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.6.0
+
+### Added
+- **Relationship queries** — `whereHas()`, `orWhereHas()`, `whereDoesntHave()`, `has()` (with count operators), `doesntHave()`, dot notation for nested relations; correlated subqueries with table aliases, so self-referencing relations work; global scopes apply inside. (#21)
+- **`withCount()`** — `{relation}_count` columns, constrained and aliased (`'posts as published_count' => fn …`). (#21)
+- **Constrained eager loading** — `with(['posts' => fn ($q) => …])`, also on nested paths (`'posts.comments' => fn …`). (#21)
+- **Accessors & mutators** — `get{Name}Attribute()` / `set{Name}Attribute()`, `$appends` for virtual attributes in `toArray()`. (#21)
+- **`fresh()`, `firstOrNew()`, `firstOrCreate()`, `updateOrCreate()`**. (#21)
+- **Batch insert** (`insert([[…], […]])`) and **`upsert()`** with per-driver SQL. (#21)
+- **`chunk()`, `chunkById()`, `cursor()`** on QueryBuilder (rows) and model queries (models). (#21)
+- QueryBuilder: `alias()`, `whereColumn()`, `toSql()`, `getBindings()`, `hasDefaultColumns()`, `getTableName()`.
+
+---
+
 ## [1.5.0] — 2026-11-11
 
 ### Added

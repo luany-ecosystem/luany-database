@@ -26,6 +26,9 @@
    - [Attribute Casting](#47-attribute-casting)
    - [Timestamps](#48-timestamps)
    - [Model Events](#49-model-events)
+   - [Relationship Queries](#410-relationship-queries)
+   - [Accessors & Mutators](#411-accessors--mutators)
+   - [Large Result Sets & Bulk Writes](#412-large-result-sets--bulk-writes)
 5. [Transactions](#5-transactions)
 6. [Migrations](#6-migrations)
 7. [Seeders](#7-seeders)
@@ -745,6 +748,88 @@ Events: `creating`, `created`, `updating`, `updated`, `saving`, `saved`, `deleti
 event returning `false` cancels the operation (`save()` / `delete()` / `restore()`
 return `false`). `updating` / `updated` only fire when something changed. Bulk
 query updates / deletes do not fire events.
+
+### 4.10 Relationship Queries
+
+```php
+// Filter by related rows (correlated EXISTS / COUNT subqueries)
+User::query()->has('posts')->get();
+User::query()->has('posts', '>=', 3)->get();
+User::query()->doesntHave('posts')->get();
+User::query()->whereHas('posts', fn (ModelQuery $q) => $q->published())->get();
+User::query()->whereHas('posts.comments', fn ($q) => $q->where('approved', '=', 1))->get();
+User::query()->whereDoesntHave('roles', fn ($q) => $q->where('name', '=', 'banned'))->get();
+User::query()->where('active', '=', 1)->orWhereHas('roles')->get();
+
+// Count related rows as columns
+$users = User::query()->withCount('posts', ['posts as published_count' => fn ($q) => $q->published()])->get();
+$users[0]->posts_count;
+$users[0]->published_count;
+
+// Constrained eager loading
+User::with(['posts' => fn ($q) => $q->published()->orderByDesc('created_at')], 'roles')->get();
+User::with(['posts.comments' => fn ($q) => $q->where('approved', '=', 1)])->get();
+
+// Find-or-create helpers
+User::firstOrNew(['email' => $email]);
+User::firstOrCreate(['email' => $email], ['name' => $name]);
+User::updateOrCreate(['email' => $email], ['name' => $name]);
+$user->fresh();   // new instance from the database
+```
+
+Self-referencing relations work (`Category::query()->has('children')`): subqueries alias
+the related table. Global scopes such as SoftDeletes apply inside subqueries.
+
+### 4.11 Accessors & Mutators
+
+```php
+class User extends Model
+{
+    protected array $appends = ['full_name'];   // virtual attributes in toArray()/JSON
+
+    public function getFullNameAttribute(): string
+    {
+        return "{$this->first_name} {$this->last_name}";
+    }
+
+    public function getFirstNameAttribute(?string $value): ?string
+    {
+        return $value === null ? null : ucfirst($value);   // receives the cast value
+    }
+
+    public function setEmailAttribute(?string $value): void
+    {
+        $this->attributes['email'] = strtolower(trim((string) $value));
+    }
+}
+```
+
+Accessors run on property access, `getAttribute()` and `toArray()`; mutators run on
+property assignment, `fill()` and `create()`. `getRawAttribute()` returns the stored value.
+
+### 4.12 Large Result Sets & Bulk Writes
+
+```php
+// Batch insert: one statement
+$qb->table('logs')->insert([
+    ['level' => 'info', 'message' => 'a'],
+    ['level' => 'warn', 'message' => 'b'],
+]);
+
+// Upsert: insert or update on a unique key (MySQL ON DUPLICATE KEY / PostgreSQL & SQLite ON CONFLICT)
+$qb->table('stock')->upsert($rows, uniqueBy: ['sku'], update: ['price', 'qty']);
+
+// Chunks (eager loading applied per chunk)
+Order::query()->where('status', '=', 'pending')->chunkById(500, function (array $orders) {
+    foreach ($orders as $order) { /* … update or delete safely … */ }
+});
+Post::query()->orderBy('id')->chunk(200, fn (array $posts, int $page) => /* return false to stop */ null);
+
+// One row at a time
+foreach (Post::query()->cursor() as $post) { /* … */ }
+```
+
+Batch inserts and upserts run directly on the table (no casts, timestamps or events).
 
 ---
 

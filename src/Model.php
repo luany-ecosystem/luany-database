@@ -88,6 +88,14 @@ abstract class Model
      */
     protected array $guarded = ['*'];
 
+    /**
+     * Accessor-only attributes added to toArray() / JSON (e.g. 'full_name'
+     * backed by getFullNameAttribute()).
+     *
+     * @var array<int, string>
+     */
+    protected array $appends = [];
+
     /** Columns excluded from toArray() and JSON output */
     /** @var array<int, string> */
     protected array $hidden = [];
@@ -159,9 +167,12 @@ abstract class Model
      *   User::with('posts', 'profile')->all();
      *   User::with('profile')->find(1);
      *
+     * Constrain: User::with(['posts' => fn (ModelQuery $q) => $q->where('published', '=', 1)]).
+     *
+     * @param string|array<int|string, string|\Closure> ...$relations
      * @return ModelQuery<static>
      */
-    public static function with(string ...$relations): ModelQuery
+    public static function with(string|array ...$relations): ModelQuery
     {
         return static::query()->with(...$relations);
     }
@@ -233,6 +244,62 @@ abstract class Model
         }
 
         throw new \BadMethodCallException('Call to undefined method ' . static::class . "::{$method}().");
+    }
+
+    /**
+     * First model matching $attributes, or a new unsaved one filled with
+     * $attributes + $values (mass assignment rules apply).
+     *
+     * @param array<string, mixed> $attributes
+     * @param array<string, mixed> $values
+     */
+    public static function firstOrNew(array $attributes, array $values = []): static
+    {
+        $query = static::query();
+        foreach ($attributes as $column => $value) {
+            $query->where((string) $column, '=', $value);
+        }
+
+        $found = $query->first();
+        if ($found instanceof static) {
+            return $found;
+        }
+
+        $model = new static();
+        $model->fill(array_merge($attributes, $values));
+        return $model;
+    }
+
+    /**
+     * First model matching $attributes, or create it with $attributes + $values.
+     *
+     * @param array<string, mixed> $attributes
+     * @param array<string, mixed> $values
+     */
+    public static function firstOrCreate(array $attributes, array $values = []): static
+    {
+        $model = static::firstOrNew($attributes, $values);
+
+        if (!$model->exists) {
+            $model->save();
+        }
+
+        return $model;
+    }
+
+    /**
+     * Update the model matching $attributes with $values, or create it.
+     *
+     * @param array<string, mixed> $attributes
+     * @param array<string, mixed> $values
+     */
+    public static function updateOrCreate(array $attributes, array $values = []): static
+    {
+        $model = static::firstOrNew($attributes);
+        $model->fill($values);
+        $model->save();
+
+        return $model;
     }
 
     /**
@@ -441,6 +508,26 @@ abstract class Model
     }
 
     /**
+     * A new instance reloaded from the database (null when the row is gone).
+     * Unlike refresh(), the current instance is left untouched.
+     */
+    public function fresh(): ?static
+    {
+        $key = $this->getKey();
+
+        if ($key === null) {
+            return null;
+        }
+
+        // Not chained: where() is forwarded by ModelQuery::__call (returns the query).
+        $query = static::query();
+        $query->where($this->primaryKey, '=', $key);
+        $model = $query->first();
+
+        return $model instanceof static ? $model : null;
+    }
+
+    /**
      * Hard-delete this record from the database.
      * NOTE: Overridden by the SoftDeletes trait to soft-delete instead.
      */
@@ -467,10 +554,16 @@ abstract class Model
     public function toArray(): array
     {
         $out = [];
-        foreach ($this->attributes as $key => $value) {
-            if (!in_array($key, $this->hidden, true)) {
-                $out[$key] = $this->serializeAttribute($key, $value);
+        foreach (array_merge(array_keys($this->attributes), $this->appends) as $key) {
+            if (in_array($key, $this->hidden, true) || array_key_exists($key, $out)) {
+                continue;
             }
+
+            $value = static::accessorFor($key) === null
+                ? $this->castForRead($key, $this->attributes[$key] ?? null)
+                : $this->getAttribute($key);
+
+            $out[$key] = $this->serializeValue($key, $value);
         }
         return $out;
     }
@@ -793,8 +886,8 @@ abstract class Model
     {
         // Column values always win over methods (a column named "count" or
         // "delete" must not call Model::count()/delete()).
-        if (array_key_exists($key, $this->attributes)) {
-            return $this->castForRead($key, $this->attributes[$key]);
+        if (array_key_exists($key, $this->attributes) || static::accessorFor($key) !== null) {
+            return $this->getAttribute($key);
         }
 
         // Already-loaded relation result (cached)
@@ -1059,15 +1152,58 @@ abstract class Model
      */
     public function getAttribute(string $key): mixed
     {
-        return $this->castForRead($key, $this->attributes[$key] ?? null);
+        $value = $this->castForRead($key, $this->attributes[$key] ?? null);
+
+        $accessor = static::accessorFor($key);
+        return $accessor === null ? $value : $this->{$accessor}($value);
     }
 
     /**
-     * Set an attribute, applying its cast (e.g. array → JSON, DateTime → string).
+     * Set an attribute: through its mutator (set{Name}Attribute) when defined,
+     * otherwise applying its cast (e.g. array → JSON, DateTime → string).
      */
     public function setAttribute(string $key, mixed $value): void
     {
+        $mutator = static::mutatorFor($key);
+
+        if ($mutator !== null) {
+            $this->{$mutator}($value);
+            return;
+        }
+
         $this->attributes[$key] = $this->castForWrite($key, $value);
+    }
+
+    /** @var array<class-string, array<string, ?string>> */
+    private static array $accessorCache = [];
+
+    /** @var array<class-string, array<string, ?string>> */
+    private static array $mutatorCache = [];
+
+    /**
+     * get{StudlyName}Attribute($value) method for $key, if the model defines one.
+     */
+    protected static function accessorFor(string $key): ?string
+    {
+        if (!array_key_exists($key, self::$accessorCache[static::class] ?? [])) {
+            $method = 'get' . str_replace('_', '', ucwords($key, '_')) . 'Attribute';
+            self::$accessorCache[static::class][$key] = method_exists(static::class, $method) ? $method : null;
+        }
+
+        return self::$accessorCache[static::class][$key];
+    }
+
+    /**
+     * set{StudlyName}Attribute($value) method for $key, if the model defines one.
+     */
+    protected static function mutatorFor(string $key): ?string
+    {
+        if (!array_key_exists($key, self::$mutatorCache[static::class] ?? [])) {
+            $method = 'set' . str_replace('_', '', ucwords($key, '_')) . 'Attribute';
+            self::$mutatorCache[static::class][$key] = method_exists(static::class, $method) ? $method : null;
+        }
+
+        return self::$mutatorCache[static::class][$key];
     }
 
     /**
@@ -1190,18 +1326,28 @@ abstract class Model
             return;
         }
 
-        // 'posts.comments.author' → load posts, then comments.author on the posts
+        // 'posts.comments.author' → load posts, then comments.author on the posts.
+        // Constraints: ['posts' => fn ($q) => …] or ['posts.comments' => fn ($q) => …]
+        // (the closure applies to the last segment).
         $tree = [];
-        foreach ($relations as $relation) {
-            $parts = explode('.', (string) $relation, 2);
-            $tree[$parts[0]] ??= [];
+        foreach ($relations as $key => $value) {
+            [$path, $constraint] = is_string($key) ? [$key, $value] : [(string) $value, null];
+            $parts = explode('.', $path, 2);
+            $tree[$parts[0]] ??= ['constraint' => null, 'nested' => []];
+
             if (isset($parts[1]) && $parts[1] !== '') {
-                $tree[$parts[0]][] = $parts[1];
+                if ($constraint instanceof \Closure) {
+                    $tree[$parts[0]]['nested'][$parts[1]] = $constraint;
+                } elseif (!in_array($parts[1], $tree[$parts[0]]['nested'], true)) {
+                    $tree[$parts[0]]['nested'][] = $parts[1];
+                }
+            } elseif ($constraint instanceof \Closure) {
+                $tree[$parts[0]]['constraint'] = $constraint;
             }
         }
 
-        foreach ($tree as $relation => $nested) {
-            static::eagerLoadRelation($models, $relation);
+        foreach ($tree as $relation => ['constraint' => $constraint, 'nested' => $nested]) {
+            static::eagerLoadRelation($models, $relation, $constraint);
 
             if ($nested === []) {
                 continue;
@@ -1223,7 +1369,7 @@ abstract class Model
                 $byClass[get_class($child)][] = $child;
             }
             foreach ($byClass as $class => $group) {
-                $class::eagerLoadModels($group, array_values(array_unique($nested)));
+                $class::eagerLoadModels($group, $nested);
             }
         }
     }
@@ -1237,7 +1383,7 @@ abstract class Model
      *
      * @param static[] $models
      */
-    private static function eagerLoadRelation(array &$models, string $relation): void
+    private static function eagerLoadRelation(array &$models, string $relation, ?\Closure $constraint = null): void
     {
         if (empty($models)) {
             return;
@@ -1256,7 +1402,7 @@ abstract class Model
 
         if ($descriptor instanceof Relation) {
             // Proper batch load: one query for all parent models
-            $descriptor->batchLoad($models, $relation);
+            $descriptor->constrain($constraint)->batchLoad($models, $relation);
         } else {
             // Fallback: plain value returned — load per-model (safe but not N+1-free)
             $sample->setRelation($relation, $descriptor);

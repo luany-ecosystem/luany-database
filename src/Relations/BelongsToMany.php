@@ -177,6 +177,15 @@ class BelongsToMany extends Relation
         });
     }
 
+    public function existenceQuery(string $parentTable, ?\Closure $constraint = null): QueryBuilder
+    {
+        [$query, $alias] = $this->aliasedRelatedQuery($this->relatedClass, $constraint);
+
+        return $query
+            ->join($this->pivotTable, "{$this->pivotTable}.{$this->relatedPivotKey}", '=', "{$alias}.{$this->relatedKey}")
+            ->whereColumn("{$this->pivotTable}.{$this->foreignPivotKey}", '=', "{$parentTable}.{$this->parentKey}");
+    }
+
     public function getPivotTable(): string
     {
         return $this->pivotTable;
@@ -204,7 +213,7 @@ class BelongsToMany extends Relation
             $columns[] = "{$this->pivotTable}.{$column} AS " . $this->pivotAlias($column);
         }
 
-        return ($this->relatedClass)::query()->toBase()
+        return $this->newRelatedQuery($this->relatedClass)
             ->select(...$columns)
             ->join($this->pivotTable, "{$this->pivotTable}.{$this->relatedPivotKey}", '=', "{$relatedTable}.{$this->relatedKey}");
     }

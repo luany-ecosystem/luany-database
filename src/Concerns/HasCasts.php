@@ -135,8 +135,14 @@ trait HasCasts
      */
     protected function serializeAttribute(string $key, mixed $value): mixed
     {
-        $value = $this->castForRead($key, $value);
+        return $this->serializeValue($key, $this->castForRead($key, $value));
+    }
 
+    /**
+     * Serialise an already-cast value (dates as strings, JsonSerializable).
+     */
+    protected function serializeValue(string $key, mixed $value): mixed
+    {
         if ($value instanceof \DateTimeInterface) {
             [$type] = $this->parseCast($this->casts[$key] ?? '');
             return $value->format(in_array($type, ['date', 'immutable_date'], true) ? 'Y-m-d' : $this->dateFormat);
