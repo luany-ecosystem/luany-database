@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — 1.7.0
+## [1.7.0] — 2026-11-11
 
 ### Added
 - **Schema builder** — `Schema::for($pdo)->create() / createIfNotExists() / table() / drop() / dropIfExists() / rename() / hasTable() / hasColumn() / getColumnListing()`, with per-driver DDL for MySQL, PostgreSQL and SQLite. (#21)
