@@ -2,6 +2,8 @@
 
 namespace Luany\Database;
 
+use Luany\Database\Concerns\HasCasts;
+use Luany\Database\Concerns\HasTimestamps;
 use Luany\Database\Relations\BelongsTo;
 use Luany\Database\Relations\HasMany;
 use Luany\Database\Relations\HasOne;
@@ -42,6 +44,15 @@ use Luany\Database\Relations\Relation;
  */
 abstract class Model
 {
+    use HasCasts;
+    use HasTimestamps;
+
+    /** Column for the creation timestamp (null to disable). */
+    public const CREATED_AT = 'created_at';
+
+    /** Column for the update timestamp (null to disable). */
+    public const UPDATED_AT = 'updated_at';
+
     // ── Schema configuration ─────────────────────────────────────────────────
 
     protected string $table      = '';
@@ -133,16 +144,19 @@ abstract class Model
 
     /**
      * Specify relations to eager-load on the next query.
-     * Returns an EagerProxy that wraps all() and find() with eager-load injection.
+     * Returns a ModelQuery, so the eager list combines with any query:
+     *   User::with('posts')->where('active', '=', 1)->get();
      *
      * Usage:
      *   User::with('posts')->all();
      *   User::with('posts', 'profile')->all();
      *   User::with('profile')->find(1);
+     *
+     * @return ModelQuery<static>
      */
-    public static function with(string ...$relations): EagerProxy
+    public static function with(string ...$relations): ModelQuery
     {
-        return new EagerProxy(static::class, $relations);
+        return static::query()->with(...$relations);
     }
 
     /**
@@ -187,14 +201,41 @@ abstract class Model
     }
 
     /**
-     * Public entry point to a scoped QueryBuilder for this model's table
-     * (respects global scopes such as SoftDeletes).
+     * Fluent query returning models (respects global scopes such as
+     * SoftDeletes, supports local scopes, eager loading and pagination).
      *
-     *   $rows = User::query()->where('active', '=', 1)->orderBy('name')->get();
+     *   $users = User::query()->where('active', '=', 1)->orderBy('name')->get();
+     *   $rows  = User::query()->toBase()->get();   // raw arrays
+     *
+     * @return ModelQuery<static>
      */
-    public static function query(): QueryBuilder
+    public static function query(): ModelQuery
     {
-        return static::newQuery();
+        return new ModelQuery(static::class, static::newQuery());
+    }
+
+    /**
+     * Start a query through a local scope: User::active() → scopeActive().
+     *
+     * @param array<int, mixed> $arguments
+     */
+    public static function __callStatic(string $method, array $arguments): mixed
+    {
+        if (method_exists(static::class, 'scope' . ucfirst($method))) {
+            return static::query()->{$method}(...$arguments);
+        }
+
+        throw new \BadMethodCallException('Call to undefined method ' . static::class . "::{$method}().");
+    }
+
+    /**
+     * Find by primary key or throw ModelNotFoundException.
+     *
+     * @throws ModelNotFoundException
+     */
+    public static function findOrFail(int|string $id): static
+    {
+        return static::find($id) ?? throw new ModelNotFoundException(static::class, $id);
     }
 
     /**
@@ -395,11 +436,13 @@ abstract class Model
      */
     public function toArray(): array
     {
-        return array_filter(
-            $this->attributes,
-            fn(string $key) => !in_array($key, $this->hidden, true),
-            ARRAY_FILTER_USE_KEY
-        );
+        $out = [];
+        foreach ($this->attributes as $key => $value) {
+            if (!in_array($key, $this->hidden, true)) {
+                $out[$key] = $this->serializeAttribute($key, $value);
+            }
+        }
+        return $out;
     }
 
     /**
@@ -535,7 +578,7 @@ abstract class Model
         // Column values always win over methods (a column named "count" or
         // "delete" must not call Model::count()/delete()).
         if (array_key_exists($key, $this->attributes)) {
-            return $this->attributes[$key];
+            return $this->castForRead($key, $this->attributes[$key]);
         }
 
         // Already-loaded relation result (cached)
@@ -553,7 +596,7 @@ abstract class Model
 
     public function __set(string $key, mixed $value): void
     {
-        $this->attributes[$key] = $value;
+        $this->setAttribute($key, $value);
     }
 
     public function __isset(string $key): bool
@@ -681,7 +724,7 @@ abstract class Model
     {
         $dirty = [];
         foreach ($this->attributes as $key => $value) {
-            if (!array_key_exists($key, $this->original) || $this->original[$key] !== $value) {
+            if (!array_key_exists($key, $this->original) || !$this->sameValue($this->original[$key], $value)) {
                 $dirty[$key] = $value;
             }
         }
@@ -710,6 +753,18 @@ abstract class Model
         $this->original = $this->attributes;
     }
 
+    /**
+     * Drivers return numbers as strings or ints; "5" and 5 are the same value.
+     */
+    private function sameValue(mixed $a, mixed $b): bool
+    {
+        if (is_numeric($a) && is_numeric($b)) {
+            return (string) $a === (string) $b || (float) $a === (float) $b;
+        }
+
+        return $a === $b;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     /**
@@ -718,6 +773,8 @@ abstract class Model
      */
     private function performInsert(): bool
     {
+        $this->applyInsertTimestamps();
+
         static::newQuery()->insert($this->attributes);
 
         if ($this->incrementing && $this->getKey() === null) {
@@ -735,7 +792,7 @@ abstract class Model
      */
     private function performUpdate(): bool
     {
-        $dirty = $this->getDirty();
+        $dirty = $this->applyUpdateTimestamps($this->getDirty());
 
         if ($dirty === []) {
             return true;
@@ -786,12 +843,15 @@ abstract class Model
      */
     public function getAttribute(string $key): mixed
     {
-        return $this->attributes[$key] ?? null;
+        return $this->castForRead($key, $this->attributes[$key] ?? null);
     }
 
-    protected function setAttribute(string $key, mixed $value): void
+    /**
+     * Set an attribute, applying its cast (e.g. array → JSON, DateTime → string).
+     */
+    public function setAttribute(string $key, mixed $value): void
     {
-        $this->attributes[$key] = $value;
+        $this->attributes[$key] = $this->castForWrite($key, $value);
     }
 
     /**
@@ -801,7 +861,7 @@ abstract class Model
     public function fill(array $attributes): void
     {
         foreach ($this->filterFillable($attributes) as $key => $value) {
-            $this->attributes[$key] = $value;
+            $this->setAttribute((string) $key, $value);
         }
     }
 
@@ -813,7 +873,7 @@ abstract class Model
     public function forceFill(array $attributes): static
     {
         foreach ($attributes as $key => $value) {
-            $this->attributes[$key] = $value;
+            $this->setAttribute((string) $key, $value);
         }
         return $this;
     }
@@ -888,6 +948,23 @@ abstract class Model
     /**
      * Eager-load the given relations on a set of models.
      *
+     * @param static[]                 $models
+     * @param array<int|string, mixed> $relations
+     */
+    public static function eagerLoadModels(array $models, array $relations): void
+    {
+        static::eagerLoadRelations($models, $relations);
+    }
+
+    /**
+     * @internal Used by ModelQuery::all().
+     */
+    public static function assertValidOrderBy(string $orderBy): void
+    {
+        static::validateOrderBy($orderBy);
+    }
+
+    /**
      * @param static[]                 $models
      * @param array<int|string, mixed> $relations
      */

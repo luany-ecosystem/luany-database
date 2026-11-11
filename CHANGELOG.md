@@ -6,6 +6,23 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.3.0
+
+### Added
+- **`ModelQuery`** — fluent model queries returning hydrated models: every QueryBuilder method plus `with()`, `get()`, `all()`, `first()`, `firstOrFail()`, `find()`, `findOrFail()`, `paginate()` (models in `data`), `pluck()`, `toBase()`. Global scopes (SoftDeletes) apply. (#14)
+- **Local scopes** — `scopeXxx(ModelQuery $q, ...$args)` methods, callable statically (`Post::published()`) or chained. (#14)
+- **Attribute casting** — `$casts` with `int`, `float`, `decimal:N`, `bool`, `string`, `array`/`json`, `datetime`, `date`, `timestamp` and custom `CastsAttributes` classes; `getRawAttribute()`, `$dateFormat`. (#14)
+- **Timestamps** — opt-in `$timestamps = true`, overridable `CREATED_AT` / `UPDATED_AT` (or `null`), `touch()`, `freshTimestamp()`. (#14)
+- `Model::findOrFail()` and `ModelNotFoundException`.
+- `Model::setAttribute()` is now public and applies casts.
+
+### Changed
+- **`Model::query()` returns a `ModelQuery`** (models) instead of a `QueryBuilder` (rows). It was introduced in 1.2.0 one day earlier; use `->toBase()` for raw rows.
+- `Model::with()` returns a `ModelQuery`; `->all()` and `->find()` keep working. `EagerProxy` is no longer used.
+- Dirty tracking treats numerically equal values as unchanged ("5" vs 5).
+
+---
+
 ## [1.2.0] — 2026-11-10
 
 ### Security

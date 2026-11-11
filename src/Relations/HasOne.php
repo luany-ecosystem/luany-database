@@ -51,7 +51,7 @@ class HasOne extends Relation
         }
 
 
-        $row = ($this->relatedClass)::query()
+        $row = ($this->relatedClass)::query()->toBase()
             ->where($this->foreignKey, '=', $this->localValue)
             ->first();
 
@@ -78,7 +78,7 @@ class HasOne extends Relation
         $keyed = [];
 
         if (!empty($localValues)) {
-            $rows = ($this->relatedClass)::query()
+            $rows = ($this->relatedClass)::query()->toBase()
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 
