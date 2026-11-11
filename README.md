@@ -868,30 +868,92 @@ Migrations live in `database/migrations/` and are ordered by filename timestamp.
 
 ### Defining a Migration
 
+Use the schema builder — the same migration runs on MySQL, PostgreSQL and SQLite.
+Anonymous classes avoid class-name collisions between migrations:
+
 ```php
 use Luany\Database\Migration\Migration;
+use Luany\Database\Schema\Blueprint;
 
-class CreateUsersTable extends Migration
+return new class extends Migration
 {
     public function up(\PDO $pdo): void
     {
-        $pdo->exec("
-            CREATE TABLE IF NOT EXISTS `users` (
-                `id`         INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-                `name`       VARCHAR(255) NOT NULL,
-                `email`      VARCHAR(150) NOT NULL UNIQUE,
-                `deleted_at` DATETIME DEFAULT NULL,
-                `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-        ");
+        $this->schema($pdo)->create('posts', function (Blueprint $table) {
+            $table->id();
+            $table->foreignId('user_id')->constrained()->cascadeOnDelete();
+            $table->string('title');
+            $table->string('slug')->unique();
+            $table->text('body')->nullable();
+            $table->decimal('price', 10, 2)->default(0);
+            $table->boolean('published')->default(false);
+            $table->enum('status', ['draft', 'live'])->default('draft');
+            $table->json('meta')->nullable();
+            $table->morphs('owner');                // owner_type, owner_id + index
+            $table->timestamps();                   // created_at, updated_at (nullable)
+            $table->softDeletes();                  // deleted_at
+        });
     }
 
     public function down(\PDO $pdo): void
     {
-        $pdo->exec("DROP TABLE IF EXISTS `users`");
+        $this->schema($pdo)->dropIfExists('posts');
     }
-}
+};
 ```
+
+Raw SQL (`$pdo->exec(...)`) and named migration classes keep working.
+
+### Schema Builder
+
+| Columns | |
+|---|---|
+| Keys | `id()`, `increments()`, `bigIncrements()`, `foreignId()->constrained()` |
+| Text | `string($n = 255)`, `char($n)`, `text()`, `longText()`, `uuid()`, `enum([...])` |
+| Numbers | `integer()`, `bigInteger()`, `smallInteger()`, `tinyInteger()`, `unsignedInteger()`, `unsignedBigInteger()`, `decimal($p, $s)`, `float()`, `double()`, `boolean()` |
+| Dates & data | `date()`, `dateTime()`, `time()`, `timestamp()`, `json()`, `binary()` |
+| Helpers | `timestamps()`, `softDeletes()`, `morphs($name)` |
+
+Modifiers: `->nullable()`, `->default($value)` (or `Schema::raw('CURRENT_TIMESTAMP')`),
+`->unsigned()`, `->unique()`, `->index()`, `->primary()`, `->useCurrent()`.
+
+Indexes and foreign keys:
+
+```php
+$table->index(['user_id', 'created_at']);
+$table->unique('email');
+$table->primary(['post_id', 'tag_id']);
+$table->foreign('author_id')->references('id')->on('users')->nullOnDelete();
+```
+
+Altering tables, and other operations:
+
+```php
+$schema = Schema::for($pdo);   // or $this->schema($pdo) in a migration
+
+$schema->table('posts', function (Blueprint $table) {
+    $table->string('subtitle')->nullable();
+    $table->renameColumn('body', 'content');
+    $table->dropColumn('meta');
+    $table->dropIndex('subtitle');      // by column(s) or full index name
+    $table->dropUnique('slug');
+    $table->dropForeign('user_id');     // not supported on SQLite
+});
+
+$schema->rename('posts', 'articles');
+$schema->drop('articles');
+$schema->dropIfExists('articles');
+$schema->hasTable('posts');
+$schema->hasColumn('posts', 'slug');
+$schema->getColumnListing('posts');
+```
+
+Per driver: MySQL uses native `ENUM`, `JSON`, `UNSIGNED` and InnoDB/utf8mb4;
+PostgreSQL uses `BIGSERIAL`, `BOOLEAN`, `JSONB`, `UUID` and a `CHECK` for enums;
+SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT` and `CHECK` for enums (enable
+`PRAGMA foreign_keys = ON` to enforce foreign keys). SQLite cannot add or drop foreign
+keys on existing tables — the builder says so instead of silently ignoring them.
+
 
 ### MigrationRunner
 

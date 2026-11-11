@@ -6,6 +6,18 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.7.0
+
+### Added
+- **Schema builder** — `Schema::for($pdo)->create() / createIfNotExists() / table() / drop() / dropIfExists() / rename() / hasTable() / hasColumn() / getColumnListing()`, with per-driver DDL for MySQL, PostgreSQL and SQLite. (#21)
+- `Blueprint` columns: `id`, `increments`, `bigIncrements`, `foreignId()->constrained()`, `string`, `char`, `text`, `longText`, `uuid`, `enum`, integer family, `decimal`, `float`, `double`, `boolean`, `date`, `dateTime`, `time`, `timestamp`, `json`, `binary`, `timestamps()`, `softDeletes()`, `morphs()`; modifiers `nullable`, `default`, `unsigned`, `unique`, `index`, `primary`, `useCurrent`; indexes, composite keys and foreign keys with `onDelete` / `onUpdate`. (#21)
+- Alter operations: add / drop / rename columns, add / drop indexes and foreign keys (explicit errors where SQLite cannot). (#21)
+- `Migration::schema($pdo)` helper; `Schema::raw()` for expression defaults.
+
+Validated against real MySQL 8 and PostgreSQL 16 in CI.
+
+---
+
 ## [1.6.0] — 2026-11-11
 
 ### Added
