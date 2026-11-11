@@ -22,6 +22,9 @@
    - [Relationships](#43-relationships)
    - [Eager Loading](#44-eager-loading)
    - [Soft Deletes](#45-soft-deletes)
+   - [Model Queries & Scopes](#46-model-queries--scopes)
+   - [Attribute Casting](#47-attribute-casting)
+   - [Timestamps](#48-timestamps)
 5. [Transactions](#5-transactions)
 6. [Migrations](#6-migrations)
 7. [Seeders](#7-seeders)
@@ -464,7 +467,11 @@ $user = User::with('posts')->find(1);
 $users = User::with('posts')->all('name ASC');
 ```
 
-`with()` returns an `EagerProxy` that delegates to `all()` and `find()`. After execution, the eager-load state is consumed and reset — no cross-request leakage.
+`with()` returns a [`ModelQuery`](#46-model-queries--scopes), so eager loading combines with any condition:
+
+```php
+$users = User::with('posts')->where('active', '=', 1)->orderBy('name')->get();
+```
 
 ### 4.5 Soft Deletes
 
@@ -521,6 +528,100 @@ $all     = Article::withTrashed('title DESC');
 $trashed = Article::onlyTrashed();
 $trashed = Article::onlyTrashed('deleted_at ASC');
 ```
+
+### 4.6 Model Queries & Scopes
+
+`Model::query()` starts a fluent query that **returns models**. Every QueryBuilder
+method is available (`where`, `whereIn`, `whereNested`, `orderBy`, `limit`, …), global
+scopes such as `SoftDeletes` are already applied, and eager loading works.
+
+```php
+$posts = Post::query()
+    ->where('views', '>', 100)
+    ->whereNested(fn ($q) => $q->where('lang', '=', 'pt')->orWhere('lang', '=', 'en'))
+    ->with('author')
+    ->orderByDesc('published_at')
+    ->get();                     // array<Post>
+
+Post::query()->first();          // ?Post
+Post::query()->find(5);          // ?Post
+Post::findOrFail(5);             // Post or ModelNotFoundException
+Post::query()->where('slug', '=', $slug)->firstOrFail();
+Post::query()->paginate(15, $page);   // PaginationResult, ->data holds Post models
+Post::query()->pluck('title');        // ['First', 'Second', …]
+Post::query()->count();
+Post::query()->toBase()->get();       // raw rows (QueryBuilder)
+```
+
+**Local scopes** are model methods prefixed with `scope`. Call them statically to
+start a query, or chain them:
+
+```php
+class Post extends Model
+{
+    public function scopePublished(ModelQuery $query): void
+    {
+        $query->whereNotNull('published_at');
+    }
+
+    public function scopePopular(ModelQuery $query, int $min = 100): void
+    {
+        $query->where('views', '>=', $min);
+    }
+}
+
+Post::published()->popular(500)->orderByDesc('views')->get();
+Post::query()->published()->count();
+```
+
+Bulk `update()` / `delete()` on a model query run directly on the table: they skip
+casts, timestamps and per-model logic.
+
+### 4.7 Attribute Casting
+
+```php
+class Event extends Model
+{
+    protected array $casts = [
+        'active'    => 'bool',          // stored as 1/0 on every driver
+        'seats'     => 'int',
+        'price'     => 'decimal:2',     // '19.90'
+        'meta'      => 'array',         // JSON column <-> PHP array
+        'starts_at' => 'datetime',      // DateTimeImmutable
+        'birthday'  => 'date',
+        'amount'    => MoneyCast::class // implements Luany\Database\Casts\CastsAttributes
+    ];
+}
+
+$event->meta = ['seats' => 3];          // stored as JSON
+$event->starts_at->format('d/m/Y');     // DateTimeImmutable
+$event->toArray();                      // dates serialised with $dateFormat
+$event->getRawAttribute('meta');        // stored value
+```
+
+Supported: `int`/`integer`, `float`/`double`, `decimal:N`, `bool`/`boolean`, `string`,
+`array`/`json`, `datetime`, `date`, `timestamp`, and any class implementing
+`CastsAttributes` (`get()` / `set()`). Storage format: `protected string $dateFormat = 'Y-m-d H:i:s'`.
+
+### 4.8 Timestamps
+
+Opt in per model; the model writes the values, so it behaves the same on MySQL,
+PostgreSQL and SQLite:
+
+```php
+class Post extends Model
+{
+    protected bool $timestamps = true;   // created_at + updated_at
+
+    // Optional: custom column names, or null to disable one
+    public const CREATED_AT = 'created_at';
+    public const UPDATED_AT = 'updated_at';
+}
+
+$post->touch();   // only bump updated_at
+```
+
+`updated_at` changes only when something else changed. Explicit values you set are kept.
 
 ---
 

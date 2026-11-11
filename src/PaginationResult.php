@@ -32,7 +32,7 @@ final class PaginationResult
     public readonly ?int $to;
 
     /**
-     * @param array<int, array<string, mixed>> $data        Rows for the current page
+     * @param array<int, array<string, mixed>|Model> $data        Rows for the current page
      * @param int                               $total       Total matching rows
      * @param int                               $perPage     Rows per page
      * @param int                               $currentPage Current page number (1-based)

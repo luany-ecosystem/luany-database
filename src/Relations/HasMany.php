@@ -53,7 +53,7 @@ class HasMany extends Relation
         }
 
 
-        $rows = ($this->relatedClass)::query()
+        $rows = ($this->relatedClass)::query()->toBase()
             ->where($this->foreignKey, '=', $this->localValue)
             ->get();
 
@@ -83,7 +83,7 @@ class HasMany extends Relation
         $grouped = [];
 
         if (!empty($localValues)) {
-            $rows = ($this->relatedClass)::query()
+            $rows = ($this->relatedClass)::query()->toBase()
                 ->whereIn($this->foreignKey, $localValues)
                 ->get();
 

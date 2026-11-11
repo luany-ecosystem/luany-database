@@ -17,6 +17,9 @@ namespace Luany\Database;
  *
  * The eager-load state is consumed and reset inside Model::eagerLoadRelations()
  * immediately after the query executes, so there is no cross-request state leakage.
+ *
+ * @deprecated since 1.3.0 — Model::with() returns a ModelQuery. Kept for
+ *             code that type-hints EagerProxy; will be removed in 2.0.
  */
 final class EagerProxy
 {

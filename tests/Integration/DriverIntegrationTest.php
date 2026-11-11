@@ -9,6 +9,19 @@ use Luany\Database\QueryBuilder;
 use PHPUnit\Framework\Attributes\Group;
 use PHPUnit\Framework\TestCase;
 
+class IntegrationEvent extends Model
+{
+    protected string $table = 'lu_events';
+    protected array $fillable = ['name', 'active', 'meta', 'starts_at'];
+    protected bool $timestamps = true;
+    protected array $casts = ['active' => 'bool', 'meta' => 'array', 'starts_at' => 'datetime'];
+
+    public function scopeActive(\Luany\Database\ModelQuery $q): void
+    {
+        $q->where('active', '=', true);
+    }
+}
+
 class IntegrationWidget extends Model
 {
     protected string $table = 'lu_widgets';
@@ -149,6 +162,35 @@ class DriverIntegrationTest extends TestCase
         } finally {
             array_map('unlink', glob("{$dir}/*.php") ?: []);
             rmdir($dir);
+        }
+    }
+
+    public function test_casts_timestamps_and_scopes_on_real_driver(): void
+    {
+        $pdo = $this->conn->getPdo();
+        $pdo->exec('DROP TABLE IF EXISTS lu_events');
+        $pdo->exec($this->driver === 'pgsql'
+            ? 'CREATE TABLE lu_events (id SERIAL PRIMARY KEY, name VARCHAR(50), active BOOLEAN, meta JSONB, starts_at TIMESTAMP, created_at TIMESTAMP, updated_at TIMESTAMP)'
+            : 'CREATE TABLE lu_events (id INT AUTO_INCREMENT PRIMARY KEY, name VARCHAR(50), active TINYINT(1), meta JSON, starts_at DATETIME, created_at DATETIME, updated_at DATETIME) ENGINE=InnoDB');
+
+        try {
+            IntegrationEvent::create(['name' => 'on', 'active' => true, 'meta' => ['seats' => 3], 'starts_at' => new \DateTimeImmutable('2026-12-01 18:30:00')]);
+            IntegrationEvent::create(['name' => 'off', 'active' => false]);
+
+            $events = IntegrationEvent::active()->get();
+            $this->assertCount(1, $events);
+
+            $e = $events[0];
+            $this->assertTrue($e->active);
+            $this->assertSame(['seats' => 3], $e->meta);
+            $this->assertSame('2026-12-01 18:30:00', $e->starts_at->format('Y-m-d H:i:s'));
+            $this->assertNotNull($e->getRawAttribute('created_at'));
+
+            $e->name = 'renamed';
+            $this->assertTrue($e->save());
+            $this->assertSame('renamed', IntegrationEvent::findOrFail($e->getKey())->name);
+        } finally {
+            $pdo->exec('DROP TABLE IF EXISTS lu_events');
         }
     }
 }

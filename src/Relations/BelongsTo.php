@@ -52,7 +52,7 @@ class BelongsTo extends Relation
         }
 
 
-        $row = ($this->relatedClass)::query()
+        $row = ($this->relatedClass)::query()->toBase()
             ->where($this->ownerKey, '=', $this->foreignValue)
             ->first();
 
@@ -79,7 +79,7 @@ class BelongsTo extends Relation
         $keyed = [];
 
         if (!empty($foreignValues)) {
-            $rows = ($this->relatedClass)::query()
+            $rows = ($this->relatedClass)::query()->toBase()
                 ->whereIn($this->ownerKey, $foreignValues)
                 ->get();
 
