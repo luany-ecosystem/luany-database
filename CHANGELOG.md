@@ -6,6 +6,16 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.5.0
+
+### Added
+- **Model events** — `creating`, `created`, `updating`, `updated`, `saving`, `saved`, `deleting`, `deleted`, `restoring`, `restored`; static registration (`Post::creating(...)`), `observe()`, `booted()` hook; `-ing` listeners returning `false` cancel the operation. (#14)
+- **`hasManyThrough`** — distant one-to-many via an intermediate table, lazy and eager (one JOIN query). (#14)
+- **Polymorphic relations** — `morphMany`, `morphOne`, `morphTo` (name inferred from the method), `associate()`, `save()` / `create()` on morph relations, eager loading with one query per type, `Model::morphMap()` aliases. (#14)
+- Nested eager loading groups children by class (works through `morphTo`).
+
+---
+
 ## [1.4.1] — 2026-11-11
 
 ### Fixed
