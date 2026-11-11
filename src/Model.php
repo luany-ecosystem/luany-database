@@ -5,6 +5,7 @@ namespace Luany\Database;
 use Luany\Database\Concerns\HasCasts;
 use Luany\Database\Concerns\HasTimestamps;
 use Luany\Database\Relations\BelongsTo;
+use Luany\Database\Relations\BelongsToMany;
 use Luany\Database\Relations\HasMany;
 use Luany\Database\Relations\HasOne;
 use Luany\Database\Relations\Relation;
@@ -535,6 +536,50 @@ abstract class Model
     }
 
     /**
+     * Many-to-many through a pivot table.
+     *
+     * Defaults follow the usual conventions:
+     *   pivot table       singular names in alphabetical order: role_user
+     *   foreignPivotKey   {this_singular}_id     (user_id)
+     *   relatedPivotKey   {related_singular}_id  (role_id)
+     *
+     * @param class-string<Model> $related
+     */
+    protected function belongsToMany(
+        string $related,
+        ?string $pivotTable = null,
+        ?string $foreignPivotKey = null,
+        ?string $relatedPivotKey = null,
+        ?string $parentKey = null,
+        ?string $relatedKey = null,
+    ): BelongsToMany {
+        /** @var Model $relatedInstance */
+        $relatedInstance = new $related();
+
+        $self  = static::singularize($this->table);
+        $other = static::singularize($relatedInstance->table);
+
+        if ($pivotTable === null) {
+            $names = [$self, $other];
+            sort($names);
+            $pivotTable = implode('_', $names);
+        }
+
+        $parentKey ??= $this->primaryKey;
+
+        return new BelongsToMany(
+            static::getConnection(),
+            $related,
+            $pivotTable,
+            $foreignPivotKey ?? "{$self}_id",
+            $relatedPivotKey ?? "{$other}_id",
+            $parentKey,
+            $relatedKey ?? $relatedInstance->primaryKey,
+            $this->getAttribute($parentKey),
+        );
+    }
+
+    /**
      * Get a cached relation result, or load it via the relation method (lazy load).
      *
      * @param string $relation Method name on this model
@@ -974,8 +1019,36 @@ abstract class Model
             return;
         }
 
+        // 'posts.comments.author' → load posts, then comments.author on the posts
+        $tree = [];
         foreach ($relations as $relation) {
+            $parts = explode('.', (string) $relation, 2);
+            $tree[$parts[0]] ??= [];
+            if (isset($parts[1]) && $parts[1] !== '') {
+                $tree[$parts[0]][] = $parts[1];
+            }
+        }
+
+        foreach ($tree as $relation => $nested) {
             static::eagerLoadRelation($models, $relation);
+
+            if ($nested === []) {
+                continue;
+            }
+
+            $children = [];
+            foreach ($models as $model) {
+                $loaded = $model->relations[$relation] ?? null;
+                foreach (is_array($loaded) ? $loaded : [$loaded] as $child) {
+                    if ($child instanceof Model) {
+                        $children[] = $child;
+                    }
+                }
+            }
+
+            if ($children !== []) {
+                $children[0]::eagerLoadModels($children, array_values(array_unique($nested)));
+            }
         }
     }
 

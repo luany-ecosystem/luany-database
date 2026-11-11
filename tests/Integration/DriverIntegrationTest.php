@@ -22,6 +22,23 @@ class IntegrationEvent extends Model
     }
 }
 
+class IntegrationTag extends Model
+{
+    protected string $table = 'lu_tags';
+    protected array $fillable = ['name'];
+}
+
+class IntegrationArticle extends Model
+{
+    protected string $table = 'lu_articles';
+    protected array $fillable = ['title', 'views'];
+
+    public function tags(): \Luany\Database\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(IntegrationTag::class, 'lu_article_tag', 'article_id', 'tag_id')->withPivot('weight');
+    }
+}
+
 class IntegrationWidget extends Model
 {
     protected string $table = 'lu_widgets';
@@ -191,6 +208,52 @@ class DriverIntegrationTest extends TestCase
             $this->assertSame('renamed', IntegrationEvent::findOrFail($e->getKey())->name);
         } finally {
             $pdo->exec('DROP TABLE IF EXISTS lu_events');
+        }
+    }
+
+    public function test_joins_aggregates_and_many_to_many_on_real_driver(): void
+    {
+        $pdo = $this->conn->getPdo();
+        $id  = $this->driver === 'pgsql' ? 'SERIAL PRIMARY KEY' : 'INT AUTO_INCREMENT PRIMARY KEY';
+        foreach (['lu_article_tag', 'lu_articles', 'lu_tags'] as $t) {
+            $pdo->exec("DROP TABLE IF EXISTS {$t}");
+        }
+        $pdo->exec("CREATE TABLE lu_articles (id {$id}, title VARCHAR(50), views INT)");
+        $pdo->exec("CREATE TABLE lu_tags (id {$id}, name VARCHAR(50))");
+        $pdo->exec('CREATE TABLE lu_article_tag (article_id INT, tag_id INT, weight INT)');
+
+        try {
+            $a = IntegrationArticle::create(['title' => 'a', 'views' => 10]);
+            $b = IntegrationArticle::create(['title' => 'b', 'views' => 30]);
+            $php = IntegrationTag::create(['name' => 'php']);
+            $sql = IntegrationTag::create(['name' => 'sql']);
+
+            $a->tags()->attach([$php->getKey() => ['weight' => 2], $sql->getKey() => ['weight' => 1]]);
+            $b->tags()->sync([$php->getKey()]);
+
+            $loaded = IntegrationArticle::with('tags')->orderBy('id')->get();
+            $this->assertSame(['php', 'sql'], array_map(fn ($t) => $t->name, $loaded[0]->tags));
+            $this->assertSame(2, (int) $loaded[0]->tags[0]->pivot['weight']);
+            $this->assertCount(1, $loaded[1]->tags);
+
+            $perTag = (new \Luany\Database\QueryBuilder($this->conn))->table('lu_tags AS t')
+                ->select('t.name')
+                ->selectRaw('COUNT(*) AS uses')
+                ->join('lu_article_tag AS at', 'at.tag_id', '=', 't.id')
+                ->groupBy('t.name')
+                ->havingRaw('COUNT(*) > ?', [1])
+                ->get();
+            $this->assertSame([['name' => 'php', 'uses' => 2]], array_map(
+                fn ($r) => ['name' => $r['name'], 'uses' => (int) $r['uses']],
+                $perTag
+            ));
+
+            $this->assertSame(40, IntegrationArticle::query()->sum('views'));
+            $this->assertSame(20.0, IntegrationArticle::query()->avg('views'));
+        } finally {
+            foreach (['lu_article_tag', 'lu_articles', 'lu_tags'] as $t) {
+                $pdo->exec("DROP TABLE IF EXISTS {$t}");
+            }
         }
     }
 }

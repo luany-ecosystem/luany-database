@@ -211,7 +211,37 @@ $filtered = $qb->table('users')
 $exists = $qb->table('users')
     ->where('email', '=', 'antonio@example.com')
     ->exists(); // bool
+
+$qb->table('orders')->where('status', '=', 'paid')->sum('total');  // int|float|null
+$qb->table('orders')->avg('total');                                // ?float
+$qb->table('orders')->min('created_at');
+$qb->table('orders')->max('total');
 ```
+
+### Joins, grouping and DISTINCT
+
+```php
+$rows = $qb->table('posts AS p')
+    ->select('p.title', 'u.name AS author')
+    ->join('users AS u', 'u.id', '=', 'p.user_id')      // INNER JOIN
+    ->leftJoin('categories AS c', 'c.id', '=', 'p.category_id')
+    ->where('u.active', '=', 1)
+    ->get();
+
+$perAuthor = $qb->table('posts')
+    ->select('user_id')
+    ->selectRaw('SUM(views) AS total')
+    ->groupBy('user_id')
+    ->havingRaw('SUM(views) > ?', [1000])
+    ->get();
+
+$qb->table('posts')->distinct()->select('user_id')->count();   // counts distinct rows / groups
+```
+
+Tables, aliases and join columns are validated and quoted like every other
+identifier. `count()` and `paginate()` honour joins, `DISTINCT` and `GROUP BY`.
+`update()` / `delete()` refuse joined queries. On PostgreSQL, reference aggregate
+expressions in `havingRaw()` (aliases in `HAVING` are a MySQL/SQLite extension).
 
 ### 3.3 Pagination
 
@@ -446,6 +476,30 @@ $user->getRelation('posts');           // load and cache
 $user->setRelation('posts', $myArray); // set directly (bypasses query)
 ```
 
+#### belongsToMany — many-to-many through a pivot table
+
+```php
+// users ←→ role_user ←→ roles
+public function roles(): BelongsToMany
+{
+    return $this->belongsToMany(Role::class)          // pivot role_user, keys user_id / role_id
+        ->withPivot('granted_by');                     // extra pivot columns → $role->pivot
+}
+
+$user->roles;                                          // array<Role>
+$user->roles[0]->pivot['granted_by'];
+
+$user->roles()->attach($roleId);
+$user->roles()->attach([$a, $b]);
+$user->roles()->attach([$a => ['granted_by' => 'admin']]);
+$user->roles()->detach($roleId);                       // detach() with no argument removes all
+$user->roles()->sync([$a, $c]);                        // ['attached' => [...], 'detached' => [...]]
+```
+
+Defaults: pivot table from the singular names in alphabetical order (`role_user`),
+keys `{singular}_id`. All can be passed explicitly:
+`belongsToMany(Tag::class, 'post_tags', 'post_id', 'tag_id')`.
+
 ### 4.4 Eager Loading
 
 Prevents N+1 queries. Instead of executing one query per model, `with()` executes **one batched `WHERE IN` query** per relation for the entire collection.
@@ -465,6 +519,12 @@ $user = User::with('posts')->find(1);
 
 // Accepts ORDER BY
 $users = User::with('posts')->all('name ASC');
+```
+
+Nested relations use dot notation — one query per level:
+
+```php
+$users = User::with('posts.comments.author', 'roles')->get();
 ```
 
 `with()` returns a [`ModelQuery`](#46-model-queries--scopes), so eager loading combines with any condition:
