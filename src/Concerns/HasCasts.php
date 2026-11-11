@@ -123,9 +123,9 @@ trait HasCasts
             'array', 'json'               => is_string($value)
                 ? $value
                 : json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR),
-            'datetime', 'immutable_datetime' => $value instanceof \DateTimeInterface ? $value->format($this->dateFormat) : $value,
-            'date', 'immutable_date'      => $value instanceof \DateTimeInterface ? $value->format('Y-m-d') : $value,
-            'timestamp'                   => $value instanceof \DateTimeInterface ? $value->format($this->dateFormat) : $value,
+            'datetime', 'immutable_datetime',
+            'timestamp'                   => $this->normaliseDate($key, $value)->format($this->dateFormat),
+            'date', 'immutable_date'      => $this->normaliseDate($key, $value)->format('Y-m-d'),
             default                       => $value,
         };
     }
@@ -192,6 +192,24 @@ trait HasCasts
         } catch (\JsonException $e) {
             throw new \UnexpectedValueException(
                 "Attribute [{$key}] on " . static::class . ' does not contain valid JSON: ' . $e->getMessage(),
+                0,
+                $e
+            );
+        }
+    }
+
+    /**
+     * Parse any accepted date input (DateTimeInterface, timestamp, '2026-11-02',
+     * '2026-11-02T10:30' from <input type="datetime-local">, …) so every
+     * stored value uses one format and compares correctly in SQL.
+     */
+    private function normaliseDate(string $key, mixed $value): \DateTimeImmutable
+    {
+        try {
+            return $this->toDateTime($value);
+        } catch (\Exception $e) {
+            throw new \InvalidArgumentException(
+                "Invalid date for attribute [{$key}] on " . static::class . ': ' . (is_scalar($value) ? (string) $value : get_debug_type($value)),
                 0,
                 $e
             );
