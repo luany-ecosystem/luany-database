@@ -25,6 +25,7 @@
    - [Model Queries & Scopes](#46-model-queries--scopes)
    - [Attribute Casting](#47-attribute-casting)
    - [Timestamps](#48-timestamps)
+   - [Model Events](#49-model-events)
 5. [Transactions](#5-transactions)
 6. [Migrations](#6-migrations)
 7. [Seeders](#7-seeders)
@@ -500,6 +501,46 @@ Defaults: pivot table from the singular names in alphabetical order (`role_user`
 keys `{singular}_id`. All can be passed explicitly:
 `belongsToMany(Tag::class, 'post_tags', 'post_id', 'tag_id')`.
 
+#### hasManyThrough — distant relation
+
+```php
+// countries ← users.country_id ← posts.user_id
+public function posts(): HasManyThrough
+{
+    return $this->hasManyThrough(Post::class, User::class);
+}
+
+$country->posts;                          // one JOIN query
+Country::with('posts')->get();            // one query for all countries
+```
+
+Keys default to `{country}_id` on the through table and `{user}_id` on the related
+table; pass them explicitly when they differ.
+
+#### Polymorphic relations — morphMany / morphOne / morphTo
+
+```php
+// comments: id, body, commentable_type, commentable_id
+class Post extends Model {
+    public function comments(): MorphMany { return $this->morphMany(Comment::class, 'commentable'); }
+    public function image(): MorphOne     { return $this->morphOne(Image::class, 'imageable'); }
+}
+class Video extends Model {
+    public function comments(): MorphMany { return $this->morphMany(Comment::class, 'commentable'); }
+}
+class Comment extends Model {
+    public function commentable(): MorphTo { return $this->morphTo(); }   // name from the method
+}
+
+$post->comments()->create(['body' => 'Nice']);
+$comment->commentable;                                // Post or Video
+$comment->commentable()->associate($video)->save();
+Comment::with('commentable')->get();                  // one query per type
+
+// Store short aliases instead of class names in *_type columns
+Model::morphMap(['post' => Post::class, 'video' => Video::class]);
+```
+
 ### 4.4 Eager Loading
 
 Prevents N+1 queries. Instead of executing one query per model, `with()` executes **one batched `WHERE IN` query** per relation for the entire collection.
@@ -682,6 +723,28 @@ $post->touch();   // only bump updated_at
 ```
 
 `updated_at` changes only when something else changed. Explicit values you set are kept.
+
+### 4.9 Model Events
+
+```php
+class User extends Model
+{
+    protected static function booted(): void
+    {
+        static::saving(fn (self $u) => $u->email = strtolower($u->email));
+        static::deleting(fn (self $u) => !$u->is_admin);        // false cancels the delete
+    }
+}
+
+Post::created(fn (Post $post) => Cache::forget('posts'));
+Post::observe(PostObserver::class);    // methods named after events
+```
+
+Events: `creating`, `created`, `updating`, `updated`, `saving`, `saved`, `deleting`,
+`deleted`, and `restoring` / `restored` with SoftDeletes. A listener of an `-ing`
+event returning `false` cancels the operation (`save()` / `delete()` / `restore()`
+return `false`). `updating` / `updated` only fire when something changed. Bulk
+query updates / deletes do not fire events.
 
 ---
 

@@ -78,7 +78,7 @@ trait SoftDeletes
      */
     public function delete(): bool
     {
-        if (!$this->exists) {
+        if (!$this->exists || !$this->fireModelEvent('deleting')) {
             return false;
         }
 
@@ -90,6 +90,7 @@ trait SoftDeletes
 
         $this->setAttribute($this->deletedAtColumn, $timestamp);
         $this->syncOriginal();
+        $this->fireModelEvent('deleted');
 
         return true;
     }
@@ -100,7 +101,7 @@ trait SoftDeletes
      */
     public function forceDelete(): bool
     {
-        if (!$this->exists) {
+        if (!$this->exists || !$this->fireModelEvent('deleting')) {
             return false;
         }
 
@@ -109,6 +110,7 @@ trait SoftDeletes
             ->delete();
 
         $this->exists = false;
+        $this->fireModelEvent('deleted');
 
         return true;
     }
@@ -118,7 +120,7 @@ trait SoftDeletes
      */
     public function restore(): bool
     {
-        if (!$this->exists) {
+        if (!$this->exists || !$this->fireModelEvent('restoring')) {
             return false;
         }
 
@@ -128,6 +130,7 @@ trait SoftDeletes
 
         $this->setAttribute($this->deletedAtColumn, null);
         $this->syncOriginal();
+        $this->fireModelEvent('restored');
 
         return true;
     }

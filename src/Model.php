@@ -3,9 +3,14 @@
 namespace Luany\Database;
 
 use Luany\Database\Concerns\HasCasts;
+use Luany\Database\Concerns\HasEvents;
 use Luany\Database\Concerns\HasTimestamps;
 use Luany\Database\Relations\BelongsTo;
 use Luany\Database\Relations\BelongsToMany;
+use Luany\Database\Relations\HasManyThrough;
+use Luany\Database\Relations\MorphMany;
+use Luany\Database\Relations\MorphOne;
+use Luany\Database\Relations\MorphTo;
 use Luany\Database\Relations\HasMany;
 use Luany\Database\Relations\HasOne;
 use Luany\Database\Relations\Relation;
@@ -46,6 +51,7 @@ use Luany\Database\Relations\Relation;
 abstract class Model
 {
     use HasCasts;
+    use HasEvents;
     use HasTimestamps;
 
     /** Column for the creation timestamp (null to disable). */
@@ -374,7 +380,29 @@ abstract class Model
      */
     public function save(): bool
     {
-        return $this->exists ? $this->performUpdate() : $this->performInsert();
+        if (!$this->fireModelEvent('saving')) {
+            return false;
+        }
+
+        if ($this->exists) {
+            // Nothing changed: no UPDATE and no updating/updated events.
+            if ($this->getDirty() !== []) {
+                if (!$this->fireModelEvent('updating')) {
+                    return false;
+                }
+                $this->performUpdate();
+                $this->fireModelEvent('updated');
+            }
+        } else {
+            if (!$this->fireModelEvent('creating')) {
+                return false;
+            }
+            $this->performInsert();
+            $this->fireModelEvent('created');
+        }
+
+        $this->fireModelEvent('saved');
+        return true;
     }
 
     /**
@@ -418,7 +446,7 @@ abstract class Model
      */
     public function delete(): bool
     {
-        if (!$this->exists) {
+        if (!$this->exists || !$this->fireModelEvent('deleting')) {
             return false;
         }
 
@@ -427,6 +455,7 @@ abstract class Model
             ->delete();
 
         $this->exists = false;
+        $this->fireModelEvent('deleted');
         return true;
     }
 
@@ -577,6 +606,148 @@ abstract class Model
             $relatedKey ?? $relatedInstance->primaryKey,
             $this->getAttribute($parentKey),
         );
+    }
+
+    /**
+     * Distant one-to-many through an intermediate model.
+     *
+     *   countries ← users.country_id ← posts.user_id
+     *   $this->hasManyThrough(Post::class, User::class)
+     *
+     * @param class-string<Model> $related
+     * @param class-string<Model> $through
+     * @param string|null $firstKey       FK on the through table to this model (country_id)
+     * @param string|null $secondKey      FK on the related table to the through model (user_id)
+     * @param string|null $localKey       Key on this model (id)
+     * @param string|null $secondLocalKey Key on the through model (id)
+     */
+    protected function hasManyThrough(
+        string $related,
+        string $through,
+        ?string $firstKey = null,
+        ?string $secondKey = null,
+        ?string $localKey = null,
+        ?string $secondLocalKey = null,
+    ): HasManyThrough {
+        /** @var Model $throughInstance */
+        $throughInstance = new $through();
+        $localKey ??= $this->primaryKey;
+
+        return new HasManyThrough(
+            static::getConnection(),
+            $related,
+            $throughInstance->table,
+            $firstKey ?? $this->guessForeignKey(),
+            $secondKey ?? static::singularize($throughInstance->table) . '_id',
+            $localKey,
+            $secondLocalKey ?? $throughInstance->primaryKey,
+            $this->getAttribute($localKey),
+        );
+    }
+
+    /**
+     * Polymorphic one-to-many: $related has {$name}_type and {$name}_id.
+     *
+     * @param class-string<Model> $related
+     */
+    protected function morphMany(string $related, string $name, ?string $type = null, ?string $id = null, ?string $localKey = null): MorphMany
+    {
+        $localKey ??= $this->primaryKey;
+
+        return new MorphMany(
+            static::getConnection(),
+            $related,
+            $type ?? "{$name}_type",
+            $id ?? "{$name}_id",
+            $this->getMorphClass(),
+            $localKey,
+            $this->getAttribute($localKey),
+        );
+    }
+
+    /**
+     * Polymorphic one-to-one: $related has {$name}_type and {$name}_id.
+     *
+     * @param class-string<Model> $related
+     */
+    protected function morphOne(string $related, string $name, ?string $type = null, ?string $id = null, ?string $localKey = null): MorphOne
+    {
+        $localKey ??= $this->primaryKey;
+
+        return new MorphOne(
+            static::getConnection(),
+            $related,
+            $type ?? "{$name}_type",
+            $id ?? "{$name}_id",
+            $this->getMorphClass(),
+            $localKey,
+            $this->getAttribute($localKey),
+        );
+    }
+
+    /**
+     * Owning side of a polymorphic relation. $name defaults to the calling
+     * method's name (commentable() → commentable_type / commentable_id).
+     */
+    protected function morphTo(?string $name = null, ?string $type = null, ?string $id = null, ?string $ownerKey = null): MorphTo
+    {
+        $name ??= debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 2)[1]['function'];
+
+        return new MorphTo(
+            static::getConnection(),
+            $this,
+            $type ?? static::snake($name) . '_type',
+            $id ?? static::snake($name) . '_id',
+            $ownerKey,
+        );
+    }
+
+    // ── Morph map ─────────────────────────────────────────────────────────────
+
+    /** @var array<string, class-string<Model>> alias → class */
+    private static array $morphMap = [];
+
+    /**
+     * Store short aliases instead of class names in *_type columns:
+     *   Model::morphMap(['post' => Post::class, 'video' => Video::class]);
+     *
+     * @param array<string, class-string<Model>> $map
+     */
+    public static function morphMap(array $map, bool $merge = true): void
+    {
+        self::$morphMap = $merge ? array_merge(self::$morphMap, $map) : $map;
+    }
+
+    /**
+     * Value stored in *_type columns for this model.
+     */
+    public function getMorphClass(): string
+    {
+        $alias = array_search(static::class, self::$morphMap, true);
+        return $alias === false ? static::class : (string) $alias;
+    }
+
+    /**
+     * Model class for a stored *_type value.
+     *
+     * @return class-string<Model>
+     */
+    public static function resolveMorphClass(string $type): string
+    {
+        $class = self::$morphMap[$type] ?? $type;
+
+        if (!is_subclass_of($class, self::class)) {
+            throw new \UnexpectedValueException(
+                "Unknown morph type [{$type}]. Register it with Model::morphMap(['{$type}' => SomeModel::class])."
+            );
+        }
+
+        return $class;
+    }
+
+    private static function snake(string $value): string
+    {
+        return strtolower((string) preg_replace('/(?<!^)[A-Z]/', '_$0', $value));
     }
 
     /**
@@ -1046,8 +1217,13 @@ abstract class Model
                 }
             }
 
-            if ($children !== []) {
-                $children[0]::eagerLoadModels($children, array_values(array_unique($nested)));
+            // Group by class: a morphTo relation can return several model types.
+            $byClass = [];
+            foreach ($children as $child) {
+                $byClass[get_class($child)][] = $child;
+            }
+            foreach ($byClass as $class => $group) {
+                $class::eagerLoadModels($group, array_values(array_unique($nested)));
             }
         }
     }
