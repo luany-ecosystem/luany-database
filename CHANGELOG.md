@@ -6,6 +6,13 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased] — 1.4.1
+
+### Fixed
+- `datetime` / `date` / `timestamp` casts normalise string input on write (e.g. `2026-11-02T10:30` from `<input type="datetime-local">` is stored as `2026-11-02 10:30:00`), so stored values share one format and sort/compare correctly in SQL. Unparseable values throw `InvalidArgumentException` naming the attribute.
+
+---
+
 ## [1.4.0] — 2026-11-11
 
 ### Added

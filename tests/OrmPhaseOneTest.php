@@ -305,4 +305,20 @@ class OrmPhaseOneTest extends TestCase
         $this->assertIsArray($row);
         $this->assertSame(1, (int) $row['active']);
     }
+
+    public function test_date_strings_are_normalised_on_write(): void
+    {
+        $a = $this->article(['published_at' => '2026-11-02T10:30', 'birthday' => '2026-11-01 15:00:00']);
+
+        $row = $this->pdo->query("SELECT published_at, birthday FROM orm_articles WHERE id = {$a->getKey()}")->fetch();
+        $this->assertSame('2026-11-02 10:30:00', $row['published_at']);
+        $this->assertSame('2026-11-01', $row['birthday']);
+    }
+
+    public function test_invalid_date_is_rejected_with_attribute_name(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('published_at');
+        $this->article(['published_at' => 'not a date']);
+    }
 }
