@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased] — 1.4.0
+## [1.4.0] — 2026-11-11
 
 ### Added
 - **Joins** — `join()`, `leftJoin()` (column-to-column, identifiers validated), table aliases (`'posts AS p'`). (#14)
