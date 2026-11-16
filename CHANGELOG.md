@@ -6,7 +6,7 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [Unreleased]
+## [1.8.0] — 2026-11-16
 
 ### Added
 - `MigrationRunner::rollbackLast(int $migrations)` — roll back the last N migrations regardless of batches (used by `luany migrate:rollback --step=N`); `MigrationRepository::getLast()`.
