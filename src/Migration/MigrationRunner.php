@@ -75,9 +75,10 @@ class MigrationRunner
     }
 
     /**
-     * Roll back the last batch of migrations.
+     * Roll back the last batch of migrations ($steps batches).
      *
      * @param callable|null $output  fn(string $name, string $status): void
+     * @param int           $steps   Number of batches (see rollbackLast() for migrations)
      * @return int  Number of migrations rolled back
      */
     public function rollback(?callable $output = null, int $steps = 1): int
@@ -94,22 +95,7 @@ class MigrationRunner
             }
 
             foreach ($this->repository->getBatch($lastBatch) as $name) {
-                $file = $this->migrationsPath . '/' . $name . '.php';
-
-                if (!file_exists($file)) {
-                    throw new \RuntimeException(
-                        "Migration file not found for rollback: [{$file}]."
-                    );
-                }
-
-                $migration = $this->resolve($file);
-
-                $this->runInTransaction(function () use ($migration, $name): void {
-                    $migration->down($this->pdo);
-                    $this->repository->delete($name);
-                });
-
-                $output && $output($name, 'rolled back');
+                $this->rollbackOne($name, $output);
                 $count++;
             }
         }
@@ -119,6 +105,55 @@ class MigrationRunner
         }
 
         return $count;
+    }
+
+    /**
+     * Roll back the last $migrations migrations, newest first, regardless
+     * of batches (e.g. `migrate:rollback --step=2`).
+     *
+     * @param callable|null $output  fn(string $name, string $status): void
+     * @return int  Number of migrations rolled back
+     * @throws \InvalidArgumentException When $migrations < 1
+     */
+    public function rollbackLast(int $migrations, ?callable $output = null): int
+    {
+        if ($migrations < 1) {
+            throw new \InvalidArgumentException('The number of migrations to roll back must be at least 1.');
+        }
+
+        $this->repository->ensureTable();
+
+        $count = 0;
+        foreach ($this->repository->getLast($migrations) as $name) {
+            $this->rollbackOne($name, $output);
+            $count++;
+        }
+
+        if ($count === 0) {
+            $output && $output('', 'nothing');
+        }
+
+        return $count;
+    }
+
+    private function rollbackOne(string $name, ?callable $output): void
+    {
+        $file = $this->migrationsPath . '/' . $name . '.php';
+
+        if (!file_exists($file)) {
+            throw new \RuntimeException(
+                "Migration file not found for rollback: [{$file}]."
+            );
+        }
+
+        $migration = $this->resolve($file);
+
+        $this->runInTransaction(function () use ($migration, $name): void {
+            $migration->down($this->pdo);
+            $this->repository->delete($name);
+        });
+
+        $output && $output($name, 'rolled back');
     }
 
     /**

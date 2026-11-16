@@ -61,7 +61,11 @@ $connection = Connection::make([
     'charset'  => 'utf8mb4',
 ]);
 
-// Create from an existing PDO (useful in tests)
+// SQLite: foreign keys are enforced (PRAGMA foreign_keys = ON) unless
+// 'foreign_keys' => false is passed
+$connection = Connection::make(['driver' => 'sqlite', 'database' => 'database/database.sqlite']);
+
+// Create from an existing PDO (useful in tests) — its settings are left as they are
 $connection = Connection::fromPdo($pdo);
 
 // Access the underlying PDO instance
@@ -950,8 +954,9 @@ $schema->getColumnListing('posts');
 
 Per driver: MySQL uses native `ENUM`, `JSON`, `UNSIGNED` and InnoDB/utf8mb4;
 PostgreSQL uses `BIGSERIAL`, `BOOLEAN`, `JSONB`, `UUID` and a `CHECK` for enums;
-SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT` and `CHECK` for enums (enable
-`PRAGMA foreign_keys = ON` to enforce foreign keys). SQLite cannot add or drop foreign
+SQLite uses `INTEGER PRIMARY KEY AUTOINCREMENT` and `CHECK` for enums (foreign keys
+are enforced on connections made with `Connection::make()`; a PDO passed to
+`fromPdo()` needs `PRAGMA foreign_keys = ON` itself). SQLite cannot add or drop foreign
 keys on existing tables — the builder says so instead of silently ignoring them.
 
 
@@ -971,6 +976,10 @@ $runner->run(function (string $name) {
 $runner->rollback(function (string $name) {
     echo "Rolled back: {$name}\n";
 });
+
+// Roll back the last 2 batches / the last 2 migrations (any batch)
+$runner->rollback(null, 2);
+$runner->rollbackLast(2);
 
 // Inspect status
 $status = $runner->status();
@@ -998,9 +1007,8 @@ class UserSeeder extends Seeder
 {
     public function run(\PDO $pdo): void
     {
-        $stmt = $pdo->prepare("
-            INSERT IGNORE INTO `users` (`name`, `email`) VALUES (?, ?)
-        ");
+        // Portable SQL (SQLite, MySQL, PostgreSQL)
+        $stmt = $pdo->prepare('INSERT INTO users (name, email) VALUES (?, ?)');
 
         $stmt->execute(['António Ngola', 'antonio@example.com']);
         $stmt->execute(['Luany António',  'luany@example.com']);

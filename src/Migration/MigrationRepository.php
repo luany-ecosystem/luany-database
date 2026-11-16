@@ -80,6 +80,19 @@ class MigrationRepository
     }
 
     /**
+     * The last $count migrations run, newest first.
+     *
+     * @return string[]
+     */
+    public function getLast(int $count): array
+    {
+        $stmt = $this->pdo->query(
+            "SELECT migration FROM " . $this->table() . " ORDER BY id DESC LIMIT " . max(0, $count)
+        );
+        return $stmt->fetchAll(\PDO::FETCH_COLUMN);
+    }
+
+    /**
      * Return the number of the last batch run.
      * Returns 0 if no migrations have run.
      */

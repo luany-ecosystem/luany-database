@@ -326,8 +326,7 @@ class ModelQuery
      */
     public function first(): ?Model
     {
-        $this->query = $this->query->limit(1);
-        return $this->get()[0] ?? null;
+        return $this->withQuery((clone $this->query)->limit(1))->get()[0] ?? null;
     }
 
     /**
@@ -344,8 +343,8 @@ class ModelQuery
      */
     public function find(int|string $id): ?Model
     {
-        $this->query = $this->query->where((new $this->model())->getPrimaryKey(), '=', $id);
-        return $this->first();
+        $query = (clone $this->query)->where((new $this->model())->getPrimaryKey(), '=', $id);
+        return $this->withQuery($query)->first();
     }
 
     /**
@@ -387,6 +386,19 @@ class ModelQuery
             }
         }
         return $out;
+    }
+
+    /**
+     * A copy of this model query running $query, so terminal methods such as
+     * first() and find() leave this instance untouched.
+     *
+     * @return static
+     */
+    private function withQuery(QueryBuilder $query): static
+    {
+        $copy = clone $this;
+        $copy->query = $query;
+        return $copy;
     }
 
     /**

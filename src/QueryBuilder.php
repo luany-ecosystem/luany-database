@@ -410,8 +410,8 @@ class QueryBuilder
     public function first(): ?array
     {
         $this->requireTable();
-        $this->limitVal = 1;
-        $sql = $this->compileSelect();
+        // Override LIMIT for this query only: the builder stays reusable.
+        $sql = $this->compileSelect(1);
         return $this->query($sql, $this->selectQueryBindings())->fetchOne();
     }
 

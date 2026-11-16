@@ -35,6 +35,9 @@ class Connection
     /**
      * Create a new Connection from a configuration array.
      *
+     * SQLite connections enforce foreign keys (PRAGMA foreign_keys = ON)
+     * unless 'foreign_keys' => false is given.
+     *
      * @throws \RuntimeException on connection failure
      */
     /** @param array<string, mixed> $config */
@@ -81,12 +84,19 @@ class Connection
             );
         }
 
+        // SQLite ships with foreign key enforcement off per connection; turn it
+        // on so REFERENCES / ON DELETE behave as on MySQL and PostgreSQL.
+        if ($driver === 'sqlite' && ($config['foreign_keys'] ?? true)) {
+            $pdo->exec('PRAGMA foreign_keys = ON');
+        }
+
         return new static($pdo);
     }
 
     /**
      * Create a Connection from an existing PDO instance.
-     * Useful for testing with an in-memory SQLite PDO.
+     * Useful for testing with an in-memory SQLite PDO. The PDO's settings
+     * (including SQLite's PRAGMA foreign_keys) are left untouched.
      */
     public static function fromPdo(\PDO $pdo): static
     {

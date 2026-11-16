@@ -14,7 +14,7 @@ namespace Luany\Database\Seeder;
  *   {
  *       public function run(\PDO $pdo): void
  *       {
- *           $stmt = $pdo->prepare("INSERT IGNORE INTO `users` (`name`, `email`) VALUES (?, ?)");
+ *           $stmt = $pdo->prepare('INSERT INTO users (name, email) VALUES (?, ?)');
  *           $stmt->execute(['António Ngola', 'antonio@example.com']);
  *       }
  *   }
