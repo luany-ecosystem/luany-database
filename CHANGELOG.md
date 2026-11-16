@@ -6,6 +6,19 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- `MigrationRunner::rollbackLast(int $migrations)` — roll back the last N migrations regardless of batches (used by `luany migrate:rollback --step=N`); `MigrationRepository::getLast()`.
+
+### Fixed
+- `QueryBuilder::first()` no longer leaves `LIMIT 1` on the builder, so a later `get()` on the same builder returns every row. `ModelQuery::first()` / `find()` likewise no longer leave a `LIMIT 1` / primary-key `WHERE` behind.
+- SQLite connections created by `Connection::make()` now enable `PRAGMA foreign_keys = ON`, so foreign keys and `ON DELETE` actions are enforced as on MySQL / PostgreSQL (opt out with `'foreign_keys' => false`). `Connection::fromPdo()` leaves the given PDO unchanged.
+- `Seeder` docblock and README seeder example use portable SQL instead of MySQL-only `INSERT IGNORE`.
+- Changelog note: the 0.3.0 entry lists `Connection::table()` and `QueryBuilder::find()`, which were never shipped — use `(new QueryBuilder($connection))->table(...)` and `Model::find()` / `ModelQuery::find()`.
+
+---
+
 ## [1.7.0] — 2026-11-11
 
 ### Added

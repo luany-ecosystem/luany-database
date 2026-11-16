@@ -77,4 +77,22 @@ class ConnectionTest extends TestCase
         $this->expectException(\InvalidArgumentException::class);
         Connection::make(['driver' => 'oracle']);
     }
+    public function test_make_enables_foreign_keys_on_sqlite(): void
+    {
+        $conn = Connection::make(['driver' => 'sqlite', 'database' => ':memory:']);
+        $this->assertSame(1, (int) $conn->getPdo()->query('PRAGMA foreign_keys')->fetchColumn());
+
+        $pdo = $conn->getPdo();
+        $pdo->exec('CREATE TABLE users (id INTEGER PRIMARY KEY)');
+        $pdo->exec('CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id))');
+
+        $this->expectException(\PDOException::class);
+        $pdo->exec('INSERT INTO posts (user_id) VALUES (42)');
+    }
+
+    public function test_make_can_opt_out_of_sqlite_foreign_keys(): void
+    {
+        $conn = Connection::make(['driver' => 'sqlite', 'database' => ':memory:', 'foreign_keys' => false]);
+        $this->assertSame(0, (int) $conn->getPdo()->query('PRAGMA foreign_keys')->fetchColumn());
+    }
 }

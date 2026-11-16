@@ -152,4 +152,31 @@ class MigrationRobustnessTest extends TestCase
         $this->expectExceptionMessage('already declared');
         $this->runner()->run();
     }
+    public function test_rollback_last_migrations_ignores_batch_boundaries(): void
+    {
+        $this->anonymous('2026_01_01_000001_create_m1_table.php', 'm1');
+        $this->anonymous('2026_01_01_000002_create_m2_table.php', 'm2');
+        $this->anonymous('2026_01_01_000003_create_m3_table.php', 'm3');
+        $this->runner()->run();                                   // batch 1: m1, m2, m3
+        $this->anonymous('2026_01_01_000004_create_m4_table.php', 'm4');
+        $this->runner()->run();                                   // batch 2: m4
+
+        $rolledBack = [];
+        $count = $this->runner()->rollbackLast(3, function (string $name) use (&$rolledBack): void {
+            $rolledBack[] = substr($name, 18);
+        });
+
+        $this->assertSame(3, $count);
+        $this->assertSame(['create_m4_table', 'create_m3_table', 'create_m2_table'], $rolledBack);
+        $this->assertSame(['_migrations', 'm1'], $this->tables());
+
+        $this->assertSame(1, $this->runner()->rollbackLast(5));
+        $this->assertSame(0, $this->runner()->rollbackLast(1));
+    }
+
+    public function test_rollback_last_rejects_non_positive_counts(): void
+    {
+        $this->expectException(\InvalidArgumentException::class);
+        $this->runner()->rollbackLast(0);
+    }
 }
