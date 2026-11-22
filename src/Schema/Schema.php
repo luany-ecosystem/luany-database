@@ -30,8 +30,13 @@ use Luany\Database\Schema\Grammars\SQLiteSchemaGrammar;
  *           Schema::for($pdo)->dropIfExists('posts');
  *       }
  *   };
+ *
+ * Not final: packages may extend it (luany/pt's Esquema); newBlueprint()
+ * decides the table definition class.
+ *
+ * @phpstan-consistent-constructor
  */
-final class Schema
+class Schema
 {
     private SchemaGrammar $grammar;
     private string $driver;
@@ -49,9 +54,9 @@ final class Schema
         };
     }
 
-    public static function for(\PDO|Connection $connection): self
+    public static function for(\PDO|Connection $connection): static
     {
-        return new self($connection instanceof Connection ? $connection->getPdo() : $connection);
+        return new static($connection instanceof Connection ? $connection->getPdo() : $connection);
     }
 
     /** Raw SQL for a column default. Never build one from user input. */
@@ -146,12 +151,18 @@ final class Schema
         return $alter ? $this->grammar->compileAlter($blueprint) : $this->grammar->compileCreate($blueprint);
     }
 
+    /** Extension point: the table definition passed to create() / table(). */
+    protected function newBlueprint(string $table): Blueprint
+    {
+        return new Blueprint($table);
+    }
+
     /**
      * @param \Closure(Blueprint): mixed $callback
      */
     private function blueprint(string $table, \Closure $callback): Blueprint
     {
-        $blueprint = new Blueprint($table);
+        $blueprint = $this->newBlueprint($table);
         $callback($blueprint);
         return $blueprint;
     }
