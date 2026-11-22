@@ -47,10 +47,10 @@ class ForeignKeyDefinition
         return $this;
     }
 
-    public function cascadeOnDelete(): self   { return $this->onDelete('CASCADE'); }
-    public function restrictOnDelete(): self  { return $this->onDelete('RESTRICT'); }
-    public function nullOnDelete(): self      { return $this->onDelete('SET NULL'); }
-    public function cascadeOnUpdate(): self   { return $this->onUpdate('CASCADE'); }
+    public function cascadeOnDelete(): static  { return $this->onDelete('CASCADE'); }
+    public function restrictOnDelete(): static { return $this->onDelete('RESTRICT'); }
+    public function nullOnDelete(): static     { return $this->onDelete('SET NULL'); }
+    public function cascadeOnUpdate(): static  { return $this->onUpdate('CASCADE'); }
 
     public function name(string $name): static
     {
