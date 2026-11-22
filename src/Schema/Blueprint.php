@@ -17,7 +17,8 @@ namespace Luany\Database\Schema;
  *   });
  *
  * Not final: packages may extend it (luany/pt's Tabela adds Portuguese
- * names). Columns are created through newColumn() / newForeignId(), so a
+ * names). Columns are created through newColumn() / newForeignId() /
+ * newForeignKey(), so a
  * subclass can return its own ColumnDefinition subclass.
  */
 class Blueprint
@@ -175,7 +176,7 @@ class Blueprint
     /** @param string|list<string> $columns */
     public function foreign(string|array $columns): ForeignKeyDefinition
     {
-        $fk = new ForeignKeyDefinition(array_values((array) $columns));
+        $fk = $this->newForeignKey(array_values((array) $columns));
         $this->foreignKeys[] = $fk;
         return $fk;
     }
@@ -312,6 +313,16 @@ class Blueprint
     protected function newColumn(string $name, string $type, array $options): ColumnDefinition
     {
         return new ColumnDefinition($name, $type, $options);
+    }
+
+    /**
+     * Extension point: the foreign key returned by foreign() / constrained().
+     *
+     * @param list<string> $columns
+     */
+    protected function newForeignKey(array $columns): ForeignKeyDefinition
+    {
+        return new ForeignKeyDefinition($columns);
     }
 
     /** Extension point: the object returned by foreignId(). */
