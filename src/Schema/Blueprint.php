@@ -15,8 +15,13 @@ namespace Luany\Database\Schema;
  *       $table->timestamps();
  *       $table->softDeletes();
  *   });
+ *
+ * Not final: packages may extend it (luany/pt's Tabela adds Portuguese
+ * names). Columns are created through newColumn() / newForeignId() /
+ * newForeignKey(), so a
+ * subclass can return its own ColumnDefinition subclass.
  */
-final class Blueprint
+class Blueprint
 {
     /** @var list<ColumnDefinition> */
     private array $columns = [];
@@ -59,7 +64,7 @@ final class Blueprint
     /** UNSIGNED BIGINT column meant for a foreign key: ->constrained(). */
     public function foreignId(string $name): ForeignIdColumnDefinition
     {
-        return new ForeignIdColumnDefinition($this, $this->add($name, 'bigInteger')->unsigned());
+        return $this->newForeignId($this->add($name, 'bigInteger')->unsigned());
     }
 
     // ── Strings ─────────────────────────────────────────────────────────────
@@ -171,7 +176,7 @@ final class Blueprint
     /** @param string|list<string> $columns */
     public function foreign(string|array $columns): ForeignKeyDefinition
     {
-        $fk = new ForeignKeyDefinition(array_values((array) $columns));
+        $fk = $this->newForeignKey(array_values((array) $columns));
         $this->foreignKeys[] = $fk;
         return $fk;
     }
@@ -293,10 +298,36 @@ final class Blueprint
     /**
      * @param array<string, mixed> $options
      */
-    private function add(string $name, string $type, array $options = []): ColumnDefinition
+    protected function add(string $name, string $type, array $options = []): ColumnDefinition
     {
-        $column = new ColumnDefinition($name, $type, $options);
+        $column = $this->newColumn($name, $type, $options);
         $this->columns[] = $column;
         return $column;
+    }
+
+    /**
+     * Extension point: the column object for a new column.
+     *
+     * @param array<string, mixed> $options
+     */
+    protected function newColumn(string $name, string $type, array $options): ColumnDefinition
+    {
+        return new ColumnDefinition($name, $type, $options);
+    }
+
+    /**
+     * Extension point: the foreign key returned by foreign() / constrained().
+     *
+     * @param list<string> $columns
+     */
+    protected function newForeignKey(array $columns): ForeignKeyDefinition
+    {
+        return new ForeignKeyDefinition($columns);
+    }
+
+    /** Extension point: the object returned by foreignId(). */
+    protected function newForeignId(ColumnDefinition $column): ForeignIdColumnDefinition
+    {
+        return new ForeignIdColumnDefinition($this, $column);
     }
 }

@@ -9,7 +9,7 @@ namespace Luany\Database\Schema;
  *   $table->decimal('price', 10, 2)->default(0);
  *   $table->timestamp('paid_at')->nullable();
  */
-final class ColumnDefinition
+class ColumnDefinition
 {
     public bool $nullable = false;
     public bool $hasDefault = false;
@@ -30,7 +30,7 @@ final class ColumnDefinition
         public readonly array $options = [],
     ) {}
 
-    public function nullable(bool $value = true): self
+    public function nullable(bool $value = true): static
     {
         $this->nullable = $value;
         return $this;
@@ -39,32 +39,32 @@ final class ColumnDefinition
     /**
      * Default value: scalar, null, or Schema::raw('…') for an SQL expression.
      */
-    public function default(mixed $value): self
+    public function default(mixed $value): static
     {
         $this->hasDefault = true;
         $this->default    = $value;
         return $this;
     }
 
-    public function unsigned(): self
+    public function unsigned(): static
     {
         $this->unsigned = true;
         return $this;
     }
 
-    public function unique(): self
+    public function unique(): static
     {
         $this->unique = true;
         return $this;
     }
 
-    public function index(): self
+    public function index(): static
     {
         $this->index = true;
         return $this;
     }
 
-    public function primary(): self
+    public function primary(): static
     {
         $this->primary = true;
         return $this;
@@ -73,7 +73,7 @@ final class ColumnDefinition
     /**
      * DEFAULT CURRENT_TIMESTAMP (date/time columns).
      */
-    public function useCurrent(): self
+    public function useCurrent(): static
     {
         $this->useCurrent = true;
         return $this;

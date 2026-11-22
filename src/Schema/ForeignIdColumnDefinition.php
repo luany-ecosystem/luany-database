@@ -5,7 +5,7 @@ namespace Luany\Database\Schema;
 /**
  * Result of $table->foreignId('user_id'): column modifiers plus constrained().
  */
-final class ForeignIdColumnDefinition
+class ForeignIdColumnDefinition
 {
     public function __construct(
         private readonly Blueprint $blueprint,
@@ -23,25 +23,25 @@ final class ForeignIdColumnDefinition
         return $this->blueprint->foreign($this->column->name)->references($column)->on($table);
     }
 
-    public function nullable(bool $value = true): self
+    public function nullable(bool $value = true): static
     {
         $this->column->nullable($value);
         return $this;
     }
 
-    public function index(): self
+    public function index(): static
     {
         $this->column->index();
         return $this;
     }
 
-    public function unique(): self
+    public function unique(): static
     {
         $this->column->unique();
         return $this;
     }
 
-    public function default(mixed $value): self
+    public function default(mixed $value): static
     {
         $this->column->default($value);
         return $this;

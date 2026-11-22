@@ -6,6 +6,11 @@ Versioning follows [Semantic Versioning](https://semver.org/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- **Schema extension points** (for luany/pt): `Schema`, `Blueprint`, `ColumnDefinition`, `ForeignIdColumnDefinition` and `ForeignKeyDefinition` are no longer `final`. `Schema::newBlueprint()`, `Blueprint::newColumn()`, `Blueprint::newForeignId()` and `Blueprint::newForeignKey()` decide the classes used, `Schema::for()` returns `static`, and column / foreign-key modifiers return `static`, so a subclass keeps its type through a chain.
+
 ## [1.8.0] — 2026-11-16
 
 ### Added
